@@ -1,0 +1,34 @@
+Bootstrap: docker
+From: eclipse-temurin:21-jre-jammy
+
+%labels
+    Maintainer AISE Bamberg
+    Prover Leo-III
+    Source https://github.com/leoprover/Leo-III
+
+%post
+    set -eux
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl jq unzip
+    curl -fsSL https://api.github.com/repos/leoprover/Leo-III/releases/latest -o /tmp/leo3_release.json
+    url="$(jq -r '.assets[].browser_download_url' /tmp/leo3_release.json | grep -Ei 'leo.*(jar|zip)$' | head -1 || true)"
+    if [ -z "$url" ]; then
+      echo "Could not auto-detect a Leo-III release jar/zip. Pin an asset URL in this definition." >&2
+      exit 1
+    fi
+    curl -fL "$url" -o /opt/leo3.asset
+    mkdir -p /opt/leo3
+    case "$url" in
+      *.zip) unzip /opt/leo3.asset -d /opt/leo3 ;;
+      *.jar) cp /opt/leo3.asset /opt/leo3/leo3.jar ;;
+      *) cp /opt/leo3.asset /opt/leo3/leo3.jar ;;
+    esac
+    jar="$(find /opt/leo3 -type f -name '*.jar' | head -1)"
+    printf '#!/bin/sh\nexec java -jar %s "$@"\n' "$jar" > /usr/local/bin/leo3
+    chmod +x /usr/local/bin/leo3
+    leo3 --help >/dev/null || true
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* /tmp/*
+
+%runscript
+    exec leo3 "$@"

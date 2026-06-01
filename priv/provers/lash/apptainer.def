@@ -1,0 +1,28 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%labels
+    Maintainer AISE Bamberg
+    Prover Lash
+    Source http://grid01.ciirc.cvut.cz/~chad/lash/
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl build-essential
+    cat > /usr/local/bin/lash <<'EOF'
+#!/bin/sh
+echo "Lash container scaffold: pin a stable Lash source or binary URL before production benchmarks." >&2
+exit 127
+EOF
+    chmod +x /usr/local/bin/lash
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%runscript
+    exec lash "$@"
+
+%help
+    Placeholder definition. Lash source/binary distribution needs confirmation
+    before this image can be used for reproducible nightly runs.

@@ -1,0 +1,28 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%labels
+    Maintainer AISE Bamberg
+    Prover E-Prover
+    Source https://github.com/eprover/eprover
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates git build-essential gawk make perl
+    git clone --depth 1 https://github.com/eprover/eprover.git /opt/eprover
+    cd /opt/eprover
+    ./configure --enable-ho --bindir=/usr/local/bin
+    make rebuild
+    make install
+    if [ ! -x /usr/local/bin/eprover-ho ] && [ -x /opt/eprover/PROVER/eprover-ho ]; then
+      cp /opt/eprover/PROVER/eprover-ho /usr/local/bin/eprover-ho
+    fi
+    eprover --version || true
+    eprover-ho --version || true
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%runscript
+    exec eprover-ho "$@"

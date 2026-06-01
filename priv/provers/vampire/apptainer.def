@@ -1,0 +1,34 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%labels
+    Maintainer AISE Bamberg
+    Prover Vampire
+    Source https://github.com/vprover/vampire
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl bzip2 xz-utils
+    arch="$(uname -m)"
+    case "$arch" in
+      x86_64|amd64) asset_pattern='linux.*x86';;
+      aarch64|arm64) asset_pattern='linux.*arm';;
+      *) asset_pattern='linux';;
+    esac
+    curl -fsSL https://api.github.com/repos/vprover/vampire/releases/latest -o /tmp/vampire_release.json
+    url="$(grep -Eo 'https://[^\"]+' /tmp/vampire_release.json | grep -Ei "$asset_pattern" | grep -Evi 'sha|sig|asc' | head -1 || true)"
+    if [ -z "$url" ]; then
+      echo "Could not auto-detect a Vampire release binary. Pin an asset URL in this definition." >&2
+      exit 1
+    fi
+    curl -fL "$url" -o /usr/local/bin/vampire.download
+    chmod +x /usr/local/bin/vampire.download
+    mv /usr/local/bin/vampire.download /usr/local/bin/vampire
+    vampire --version || true
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* /tmp/*
+
+%runscript
+    exec vampire "$@"

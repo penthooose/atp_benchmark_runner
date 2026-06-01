@@ -1,0 +1,24 @@
+Bootstrap: docker
+From: ocaml/opam:ubuntu-22.04-ocaml-4.14
+
+%labels
+    Maintainer AISE Bamberg
+    Prover Zipperposition
+    Source https://github.com/sneeuwballen/zipperposition
+
+%post
+    set -eux
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends ca-certificates git libgmp-dev m4 pkg-config python3
+    opam update
+    opam install -y zipperposition
+    sudo ln -sf /home/opam/.opam/4.14/bin/zipperposition /usr/local/bin/zipperposition
+    zipperposition --help >/dev/null || true
+    sudo apt-get clean
+    sudo rm -rf /var/lib/apt/lists/*
+
+%environment
+    export PATH=/usr/local/bin:/home/opam/.opam/4.14/bin:$PATH
+
+%runscript
+    exec zipperposition "$@"

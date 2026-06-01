@@ -1,0 +1,40 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%labels
+    Maintainer AISE Bamberg
+    Prover cvc5
+    Source https://github.com/cvc5/cvc5
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl file xz-utils
+    arch="$(uname -m)"
+    case "$arch" in
+      x86_64|amd64) asset_pattern='Linux.*x86_64|linux.*x86_64';;
+      aarch64|arm64) asset_pattern='Linux.*arm64|linux.*arm64|aarch64';;
+      *) asset_pattern='Linux|linux';;
+    esac
+    curl -fsSL https://api.github.com/repos/cvc5/cvc5/releases/latest -o /tmp/cvc5_release.json
+    url="$(grep -Eo 'https://[^\"]+' /tmp/cvc5_release.json | grep -Ei "$asset_pattern" | grep -Ei 'cvc5' | grep -Evi 'sha|sig|asc' | head -1 || true)"
+    if [ -z "$url" ]; then
+      echo "Could not auto-detect a cvc5 release binary. Pin an asset URL in this definition." >&2
+      exit 1
+    fi
+    curl -fL "$url" -o /tmp/cvc5.asset
+    if file /tmp/cvc5.asset | grep -qi 'compressed'; then
+      mkdir -p /tmp/cvc5_unpack
+      tar -xf /tmp/cvc5.asset -C /tmp/cvc5_unpack || true
+      found="$(find /tmp/cvc5_unpack -type f -name cvc5 | head -1)"
+      install -m 0755 "$found" /usr/local/bin/cvc5
+    else
+      install -m 0755 /tmp/cvc5.asset /usr/local/bin/cvc5
+    fi
+    cvc5 --version || true
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* /tmp/*
+
+%runscript
+    exec cvc5 "$@"

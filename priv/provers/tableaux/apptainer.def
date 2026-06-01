@@ -1,0 +1,32 @@
+Bootstrap: docker
+From: hexpm/elixir:1.17.3-erlang-27.1-debian-bookworm-20240904-slim
+
+%labels
+    Maintainer AISE Bamberg
+    Prover AISE Simple Tableaux Solver
+    Source item_12_Integrating_external_solvers_into_Elixir_and_Livebook/simple_tableaux_solver
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates build-essential git
+    mix local.hex --force
+    mix local.rebar --force
+    mkdir -p /opt/simple_tableaux_solver
+    cat > /usr/local/bin/simple_tableaux_solver <<'EOF'
+#!/bin/sh
+echo "simple_tableaux_solver is a project-local prover. Rebuild this SIF with the item #12 source copied into /opt/simple_tableaux_solver." >&2
+exit 127
+EOF
+    chmod +x /usr/local/bin/simple_tableaux_solver
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%runscript
+    exec simple_tableaux_solver "$@"
+
+%help
+    This is a scaffold definition. For production, add a %files section that copies
+    the item #12 simple_tableaux_solver Mix project into /opt/simple_tableaux_solver,
+    then build an escript or release and install it as /usr/local/bin/simple_tableaux_solver.
