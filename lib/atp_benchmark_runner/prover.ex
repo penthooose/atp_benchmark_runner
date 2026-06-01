@@ -8,6 +8,7 @@ defmodule AtpBenchmarkRunner.Prover do
   """
 
   alias AtpBenchmarkRunner.HPC.Shell
+  alias AtpBenchmarkRunner.Provers
 
   @enforce_keys [:name, :label, :command_template]
   defstruct [
@@ -51,6 +52,20 @@ defmodule AtpBenchmarkRunner.Prover do
   """
   @spec builtin!(atom() | binary()) :: t()
   def builtin!(name), do: AtpBenchmarkRunner.Provers.fetch!(name)
+
+  @doc """
+  Fetches a built-in prover by atom or string name, returning `nil` when unknown.
+
+  Use this on untrusted input (e.g. Livebook form data) to avoid leaking
+  arbitrary atoms into the VM atom table.
+  """
+  @spec builtin(atom() | binary()) :: t() | nil
+  def builtin(name) do
+    case AtpBenchmarkRunner.Provers.fetch(name) do
+      {:ok, prover} -> prover
+      :error -> nil
+    end
+  end
 
   @doc """
   Converts atoms, maps, keyword lists, or structs into prover structs.
@@ -128,11 +143,16 @@ defmodule AtpBenchmarkRunner.Prover do
   defp normalize_name(name) when is_atom(name), do: name
 
   defp normalize_name(name) when is_binary(name) do
-    name
-    |> String.trim()
-    |> String.downcase()
-    |> String.replace("-", "_")
-    |> String.to_atom()
+    normalized =
+      name
+      |> String.trim()
+      |> String.downcase()
+      |> String.replace("-", "_")
+
+    case Provers.fetch(normalized) do
+      {:ok, _prover} -> String.to_existing_atom(normalized)
+      :error -> raise ArgumentError, "unknown prover #{inspect(name)}"
+    end
   end
 
   defp humanize_name(name) do

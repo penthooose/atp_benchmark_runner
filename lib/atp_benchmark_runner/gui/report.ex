@@ -3,21 +3,56 @@ defmodule AtpBenchmarkRunner.GUI.Report do
   Livebook/Kino rendering helpers for benchmark reports.
   """
 
-  alias AtpBenchmarkRunner.{Report, Run}
+  alias AtpBenchmarkRunner.{Compare, Report, Run}
 
   @doc """
   Renders a report as Kino markdown/tables when available.
+
+  Options:
+    * `:artifact_paths` — map with `:run`, `:results`, `:report` keys; the
+      panel will render an additional markdown block listing the on-disk
+      source artifacts. When omitted, the artifact block is hidden.
   """
   @spec panel([AtpBenchmarkRunner.Result.t() | map()] | map(), Run.t() | nil, keyword()) ::
           map() | term()
   def panel(results_or_report, run \\ nil, opts \\ []) do
     report = normalize_report(results_or_report, run, opts)
+    artifact_paths = Keyword.get(opts, :artifact_paths)
 
     if available?() do
-      render_report(report)
+      render_report(report, artifact_paths)
     else
-      %{kino?: false, report: report}
+      %{kino?: false, report: report, artifact_paths: artifact_paths}
     end
+  end
+
+  @doc """
+  Renders a longitudinal diff between two result lists as Kino tables.
+  """
+  @spec diff_panel(
+          [AtpBenchmarkRunner.Result.t() | map()],
+          [AtpBenchmarkRunner.Result.t() | map()],
+          keyword()
+        ) ::
+          map() | term()
+  def diff_panel(left_results, right_results, opts \\ []) do
+    diff = Compare.diff(left_results, right_results, opts)
+
+    if available?() do
+      render_diff(diff)
+    else
+      %{kino?: false, diff: diff, markdown: Compare.markdown(diff)}
+    end
+  end
+
+  defp render_diff(diff) do
+    kino_render(kino_markdown(Compare.markdown(diff)))
+    kino_render(kino_table(diff.per_prover_solve_deltas))
+    maybe_render_table(diff.new_solves)
+    maybe_render_table(diff.regressions)
+    %{kino?: true, diff: diff}
+  rescue
+    e -> %{kino?: false, error: Exception.message(e), diff: diff}
   end
 
   @doc """
@@ -31,15 +66,16 @@ defmodule AtpBenchmarkRunner.GUI.Report do
   defp normalize_report(results, run, opts) when is_list(results),
     do: Report.summarize(results, run, opts)
 
-  defp render_report(report) do
+  defp render_report(report, artifact_paths) do
     kino_render(kino_table(metadata_rows(report)))
     kino_render(kino_markdown(report.markdown))
     kino_render(kino_table(report.by_prover))
     maybe_render_table(Map.get(report, :result_rows, []))
     kino_render(kino_table(report.by_problem))
     kino_render(kino_table(flatten_rating_buckets(report.by_rating_bucket)))
+    maybe_render_artifact_paths(artifact_paths)
 
-    %{kino?: true, report: report}
+    %{kino?: true, report: report, artifact_paths: artifact_paths}
   rescue
     e -> %{kino?: false, error: Exception.message(e), report: report}
   end
@@ -65,6 +101,30 @@ defmodule AtpBenchmarkRunner.GUI.Report do
 
   defp maybe_render_table([]), do: :ok
   defp maybe_render_table(rows), do: kino_render(kino_table(rows))
+
+  defp maybe_render_artifact_paths(nil), do: :ok
+  defp maybe_render_artifact_paths(paths) when paths == %{}, do: :ok
+
+  defp maybe_render_artifact_paths(paths) when is_map(paths) do
+    kino_render(kino_markdown(artifact_markdown(paths)))
+  end
+
+  defp artifact_markdown(paths) do
+    lines =
+      [:run, :results, :report, :db_path, :notification]
+      |> Enum.flat_map(fn key ->
+        case Map.get(paths, key) || Map.get(paths, Atom.to_string(key)) do
+          nil -> []
+          value -> ["- `#{key}`: `#{value}`"]
+        end
+      end)
+
+    """
+    ### Source artifacts
+
+    #{if lines == [], do: "No artifact paths supplied.", else: Enum.join(lines, "\n")}
+    """
+  end
 
   defp kino_markdown(markdown), do: apply(Module.concat(Kino, Markdown), :new, [markdown])
   defp kino_table(rows), do: apply(Module.concat(Kino, DataTable), :new, [rows])

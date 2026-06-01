@@ -245,11 +245,12 @@ defmodule AtpBenchmarkRunner.GUI.Dashboard do
     |> List.wrap()
     |> Enum.map(fn
       value when is_atom(value) -> value
-      value when is_binary(value) -> String.to_atom(value)
+      value when is_binary(value) -> Prover.builtin(value)
     end)
+    |> Enum.reject(&is_nil/1)
     |> case do
       [] -> [:tableaux]
-      provers -> provers
+      provers -> Enum.map(provers, & &1.name)
     end
   end
 

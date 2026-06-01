@@ -122,7 +122,13 @@ defmodule AtpBenchmarkRunner.Result do
   def from_map(map), do: new(map)
 
   defp normalize_prover(prover) when is_atom(prover), do: prover
-  defp normalize_prover(prover) when is_binary(prover), do: String.to_atom(prover)
+
+  defp normalize_prover(prover) when is_binary(prover) do
+    case AtpBenchmarkRunner.Provers.fetch(prover) do
+      {:ok, known} -> known.name
+      :error -> String.to_existing_atom(prover)
+    end
+  end
 
   defp atomize_known_keys(attrs) do
     Enum.reduce(attrs, %{}, fn

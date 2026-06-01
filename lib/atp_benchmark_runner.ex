@@ -7,7 +7,19 @@ defmodule AtpBenchmarkRunner do
   package stays focused on benchmark domain logic and reporting.
   """
 
-  alias AtpBenchmarkRunner.{Notification, Prover, Provers, Report, Result, Run, Store, TPTP}
+  alias AtpBenchmarkRunner.{
+    Compare,
+    Notification,
+    Prover,
+    Provers,
+    Report,
+    Result,
+    Run,
+    Store,
+    TPTP,
+    Workflow
+  }
+
   alias AtpBenchmarkRunner.HPC.{ImageSmokeTest, Images, Results, Submitter, TPTPSync}
 
   @doc """
@@ -160,6 +172,13 @@ defmodule AtpBenchmarkRunner do
     do: AtpBenchmarkRunner.Workflow.collect_store_report!(session, run, opts)
 
   @doc """
+  Non-Oban one-shot nightly orchestration: load, sync, plan, and (optionally) submit.
+  """
+  @spec orchestrate_nightly(HpcConnect.Session.t(), keyword()) :: map()
+  def orchestrate_nightly(session, opts \\ []),
+    do: Workflow.orchestrate_nightly(session, opts)
+
+  @doc """
   Collects, persists, reports, and renders the report in Livebook/Kino when available.
   """
   @spec collect_store_report_panel!(HpcConnect.Session.t(), Run.t(), keyword()) :: map() | term()
@@ -171,6 +190,49 @@ defmodule AtpBenchmarkRunner do
   """
   @spec report([Result.t() | map()], Run.t() | nil, keyword()) :: map()
   def report(results, run \\ nil, opts \\ []), do: Report.summarize(results, run, opts)
+
+  @doc """
+  Compares two stored runs and returns longitudinal new-solve/regression deltas.
+
+  Each side may be:
+
+    * a `Run` struct,
+    * a list of `Result`/`local-DB record` maps,
+    * a path to a saved `.results.json` artifact, or
+    * a run id (loaded from the local DB).
+
+  When no records exist for a side, an empty list is used.
+  """
+  @spec compare_runs(
+          Run.t() | [Result.t() | map()] | binary(),
+          Run.t() | [Result.t() | map()] | binary(),
+          keyword()
+        ) :: map()
+  def compare_runs(left, right, opts \\ []) do
+    Compare.diff(resolve_side(left, opts), resolve_side(right, opts), opts)
+  end
+
+  @doc """
+  Renders a `compare_runs/3` diff as a Markdown summary.
+  """
+  @spec diff_markdown(map()) :: binary()
+  def diff_markdown(diff), do: Compare.markdown(diff)
+
+  defp resolve_side(%Run{} = _run, _opts), do: []
+  defp resolve_side(results, _opts) when is_list(results), do: results
+
+  defp resolve_side(path, opts) when is_binary(path) do
+    cond do
+      String.ends_with?(path, ".results.json") ->
+        Store.load_results!(path)
+
+      File.exists?(path) ->
+        Store.load_results!(path)
+
+      true ->
+        Store.load_db_results!(path, opts)
+    end
+  end
 
   @doc """
   Saves a run manifest to the local recovery store.
@@ -229,6 +291,13 @@ defmodule AtpBenchmarkRunner do
   @spec report_panel([Result.t() | map()] | map(), Run.t() | nil, keyword()) :: map() | term()
   def report_panel(results_or_report, run \\ nil, opts \\ []),
     do: AtpBenchmarkRunner.GUI.Report.panel(results_or_report, run, opts)
+
+  @doc """
+  Renders a longitudinal diff between two result lists as a Kino panel.
+  """
+  @spec diff_panel([Result.t() | map()], [Result.t() | map()], keyword()) :: map() | term()
+  def diff_panel(left, right, opts \\ []),
+    do: AtpBenchmarkRunner.GUI.Report.diff_panel(left, right, opts)
 
   @doc """
   Opens a Livebook/Kino monitor panel if available.

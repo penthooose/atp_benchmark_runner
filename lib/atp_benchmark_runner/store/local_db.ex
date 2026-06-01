@@ -9,8 +9,27 @@ defmodule AtpBenchmarkRunner.Store.LocalDb do
 
   alias AtpBenchmarkRunner.{Report, Result, Run, Store}
 
-  @table :atp_benchmark_runner_local_db
+  @base_table :atp_benchmark_runner_local_db
   @db_file "atp_benchmark_runner.dets"
+
+  @doc """
+  Returns a unique DETS table name for a given database path.
+
+  The runner uses Erlang DETS, which is a global-name registry. Reusing the
+  same table name across two `.dets` files causes reads from one file to
+  silently hit the other. We derive a deterministic but path-specific table
+  name so each database file gets its own DETS table.
+  """
+  @spec table_name(binary()) :: atom()
+  def table_name(db_path) when is_binary(db_path) do
+    suffix =
+      db_path
+      |> Path.expand()
+      |> then(&:erlang.md5(&1))
+      |> Base.encode16(case: :lower)
+
+    :"#{@base_table}_#{suffix}"
+  end
 
   @doc """
   Returns the DETS database path for the given store options.
@@ -144,9 +163,10 @@ defmodule AtpBenchmarkRunner.Store.LocalDb do
   defp with_db(opts, fun) when is_function(fun, 1) do
     db_path = path(opts)
     File.mkdir_p!(Path.dirname(db_path))
+    table = table_name(db_path)
 
-    case :dets.open_file(@table, file: String.to_charlist(db_path), type: :set) do
-      {:ok, table} ->
+    case :dets.open_file(table, file: String.to_charlist(db_path), type: :set) do
+      {:ok, ^table} ->
         try do
           fun.(table)
         after
@@ -154,7 +174,11 @@ defmodule AtpBenchmarkRunner.Store.LocalDb do
         end
 
       {:error, {:already_started, _pid}} ->
-        fun.(@table)
+        try do
+          fun.(table)
+        after
+          :dets.close(table)
+        end
 
       {:error, reason} ->
         raise "could not open ATP benchmark local DB #{db_path}: #{inspect(reason)}"

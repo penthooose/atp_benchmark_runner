@@ -56,6 +56,36 @@ defmodule AtpBenchmarkRunner.Scheduler do
   end
 
   @doc """
+  Returns the canonical nightly job argument map for a host runner MFA.
+
+  Pass the returned map to `enqueue_nightly/2` from a host application or
+  schedule it through the `Oban.Plugins.Cron` configuration produced by
+  `oban_config/1`. The runner MFA must accept a single argument (the same
+  map) and return `:ok | {:ok, value} | {:error, reason}`.
+
+      AtpBenchmarkRunner.Scheduler.runner_args(
+        module: "MyApp.AtpNightly",
+        function: "run",
+        args: [%{"cluster" => "fritz"}],
+        cluster: "fritz",
+        provers: ["tableaux", "vampire", "eprover", "cvc5"]
+      )
+  """
+  @spec runner_args(keyword()) :: map()
+  def runner_args(opts \\ []) do
+    %{
+      "cluster" => Keyword.get(opts, :cluster, "fritz"),
+      "provers" => Keyword.get(opts, :provers, ["tableaux", "vampire", "eprover", "cvc5"]),
+      "problem_filter" => Keyword.get(opts, :problem_filter, %{}),
+      "runner_mfa" => %{
+        "module" => to_string(Keyword.get(opts, :module, "")),
+        "function" => to_string(Keyword.get(opts, :function, "run")),
+        "args" => Keyword.get(opts, :args, [])
+      }
+    }
+  end
+
+  @doc """
   Oban worker callback.
 
   The production worker can call host orchestration through `runner_mfa`. It is

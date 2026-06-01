@@ -4,7 +4,13 @@ From: hexpm/elixir:1.17.3-erlang-27.1-debian-bookworm-20240904-slim
 %labels
     Maintainer AISE Bamberg
     Prover AISE Simple Tableaux Solver
-    Source item_12_Integrating_external_solvers_into_Elixir_and_Livebook/simple_tableaux_solver
+    Source ../item_12_Integrating_external_solvers_into_Elixir_and_Livebook/simple_tableaux_solver
+
+%arguments
+    # Default to the official GitHub mirror if no source override is provided.
+    # Override at build time with: sudo apptainer build --build-arg TABLEAUX_REPO=<git-url> ...
+    TABLEAUX_REPO https://github.com/ase-build/simple_tableaux_solver.git
+    TABLEAUX_REF main
 
 %post
     set -eux
@@ -13,13 +19,14 @@ From: hexpm/elixir:1.17.3-erlang-27.1-debian-bookworm-20240904-slim
     apt-get install -y --no-install-recommends ca-certificates build-essential git
     mix local.hex --force
     mix local.rebar --force
-    mkdir -p /opt/simple_tableaux_solver
-    cat > /usr/local/bin/simple_tableaux_solver <<'EOF'
-#!/bin/sh
-echo "simple_tableaux_solver is a project-local prover. Rebuild this SIF with the item #12 source copied into /opt/simple_tableaux_solver." >&2
-exit 127
-EOF
-    chmod +x /usr/local/bin/simple_tableaux_solver
+
+    git clone --depth 1 --branch "${TABLEAUX_REF}" "${TABLEAUX_REPO}" /opt/simple_tableaux_solver
+    cd /opt/simple_tableaux_solver
+    mix deps.get
+    MIX_ENV=prod mix escript.build
+    install -m 0755 simple_tableaux_solver /usr/local/bin/simple_tableaux_solver
+    simple_tableaux_solver --help >/dev/null 2>&1 || true
+
     apt-get clean
     rm -rf /var/lib/apt/lists/*
 
@@ -27,6 +34,12 @@ EOF
     exec simple_tableaux_solver "$@"
 
 %help
-    This is a scaffold definition. For production, add a %files section that copies
-    the item #12 simple_tableaux_solver Mix project into /opt/simple_tableaux_solver,
-    then build an escript or release and install it as /usr/local/bin/simple_tableaux_solver.
+    Build arguments:
+      --build-arg TABLEAUX_REPO=<git-url>   source repository (default: GitHub mirror)
+      --build-arg TABLEAUX_REF=<ref>        branch/tag/commit to check out (default: main)
+
+    The escript entrypoint is `STS.CLI.main/1` from the simple_tableaux_solver Mix
+    project; output follows TPTP SZS conventions so it can be collected with
+    `AtpBenchmarkRunner.parse_result/4`.
+    For local development, run `apptainer build` with `--build-arg TABLEAUX_REPO=<path>`
+    pointing at a checked-out copy of the item #12 project.

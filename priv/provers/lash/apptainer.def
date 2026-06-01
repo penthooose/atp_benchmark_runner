@@ -6,23 +6,53 @@ From: ubuntu:24.04
     Prover Lash
     Source http://grid01.ciirc.cvut.cz/~chad/lash/
 
+%arguments
+    # Lash is not packaged in any standard distribution. Pin a known working
+    # source archive by passing --build-arg at build time. The default falls
+    # back to the upstream tarball advertised on the Lash homepage; if that
+    # link is dead, override LASH_URL.
+    LASH_URL http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tar.gz
+
 %post
     set -eux
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y --no-install-recommends ca-certificates curl build-essential
-    cat > /usr/local/bin/lash <<'EOF'
+    apt-get install -y --no-install-recommends ca-certificates curl build-essential make ocaml
+    mkdir -p /opt/lash
+    curl -fL "${LASH_URL}" -o /tmp/lash.tar.gz
+    tar -xzf /tmp/lash.tar.gz -C /opt/lash --strip-components=1 || true
+    cd /opt/lash
+    if [ -f Makefile ] || [ -f makefile ]; then
+      make || true
+    elif [ -f configure ]; then
+      ./configure && make || true
+    fi
+    candidate="$(find /opt/lash -maxdepth 3 -type f \( -name 'lash' -o -name 'lash.opt' -o -name 'lash.byte' \) | head -1 || true)"
+    if [ -z "$candidate" ]; then
+      cat > /usr/local/bin/lash <<'EOF'
 #!/bin/sh
-echo "Lash container scaffold: pin a stable Lash source or binary URL before production benchmarks." >&2
+echo "Lash container built but the upstream archive at $LASH_URL did not yield a binary." >&2
+echo "Pin a working LASH_URL via --build-arg or rebuild after a manual 'make' in /opt/lash." >&2
 exit 127
 EOF
+    else
+      install -m 0755 "$candidate" /usr/local/bin/lash
+    fi
     chmod +x /usr/local/bin/lash
+    lash --help >/dev/null 2>&1 || true
     apt-get clean
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* /tmp/*
 
 %runscript
     exec lash "$@"
 
 %help
-    Placeholder definition. Lash source/binary distribution needs confirmation
-    before this image can be used for reproducible nightly runs.
+    Build arguments:
+      --build-arg LASH_URL=<url>   Lash source tarball (default: upstream homepage tarball)
+
+    Lash has limited public distribution; if the default URL is no longer
+    maintained, pin a mirror or local archive at build time. The runtime
+    will fall back to a stub binary that prints a clear diagnostic if no
+    Lash binary is produced.
+    This definition is intentionally permissive because Lash's distribution
+    history is fragile; replace with a hardened release URL once verified.

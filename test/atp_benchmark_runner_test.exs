@@ -371,6 +371,147 @@ defmodule AtpBenchmarkRunnerTest do
     refute command =~ "\\"
   end
 
+  test "compare_runs surfaces new solves, regressions and per-prover deltas" do
+    left = [
+      Result.new(problem_id: "p1", prover: :tableaux, szs_status: "Theorem"),
+      Result.new(problem_id: "p2", prover: :tableaux, szs_status: "Theorem"),
+      Result.new(problem_id: "p3", prover: :tableaux, szs_status: "Timeout")
+    ]
+
+    right = [
+      Result.new(problem_id: "p1", prover: :tableaux, szs_status: "Theorem"),
+      Result.new(problem_id: "p2", prover: :tableaux, szs_status: "Timeout"),
+      Result.new(problem_id: "p3", prover: :tableaux, szs_status: "Theorem"),
+      Result.new(problem_id: "p4", prover: :tableaux, szs_status: "Theorem")
+    ]
+
+    diff = AtpBenchmarkRunner.compare_runs(left, right, our_prover: :tableaux)
+
+    new_solve_ids = diff.new_solves |> Enum.map(& &1.problem_id) |> Enum.sort()
+    regression_ids = diff.regressions |> Enum.map(& &1.problem_id) |> Enum.sort()
+    only_right_ids = diff.only_right |> Enum.map(& &1.problem_id) |> Enum.sort()
+
+    assert new_solve_ids == ["p3", "p4"]
+    assert regression_ids == ["p2"]
+    assert only_right_ids == ["p4"]
+    assert [%{prover: :tableaux, left_solved: 2, right_solved: 3}] = diff.per_prover_solve_deltas
+    assert diff.left_run_id == nil
+    assert diff.right_run_id == nil
+  end
+
+  test "compare_runs accepts DB-style maps with string keys" do
+    left = [
+      %{
+        "run_id" => "db_left",
+        "problem_id" => "p1",
+        "prover" => :tableaux,
+        "szs_status" => "Theorem",
+        "solved" => true
+      }
+    ]
+
+    right = [
+      %{
+        "run_id" => "db_right",
+        "problem_id" => "p1",
+        "prover" => :tableaux,
+        "szs_status" => "Timeout",
+        "solved" => false
+      },
+      %{
+        "run_id" => "db_right",
+        "problem_id" => "p2",
+        "prover" => :tableaux,
+        "szs_status" => "Theorem",
+        "solved" => true
+      }
+    ]
+
+    diff = AtpBenchmarkRunner.compare_runs(left, right)
+
+    assert [%{problem_id: "p1"}] = diff.regressions
+    assert [%{problem_id: "p2"}] = diff.new_solves
+    assert diff.left_run_id == "db_left"
+    assert diff.right_run_id == "db_right"
+  end
+
+  test "diff_markdown produces a summary that includes new solves and regressions" do
+    left = [
+      Result.new(problem_id: "p1", prover: :tableaux, szs_status: "Theorem")
+    ]
+
+    right = [
+      Result.new(problem_id: "p1", prover: :tableaux, szs_status: "Timeout"),
+      Result.new(problem_id: "p2", prover: :tableaux, szs_status: "Theorem")
+    ]
+
+    diff = AtpBenchmarkRunner.compare_runs(left, right)
+    markdown = AtpBenchmarkRunner.diff_markdown(diff)
+
+    assert markdown =~ "ATP benchmark run diff"
+    assert markdown =~ "New solves: **1**"
+    assert markdown =~ "Regressions: **1**"
+  end
+
+  test "Prover.builtin/1 returns nil for unknown names without creating atoms" do
+    refute Prover.builtin("nonexistent_prover_xyz")
+    assert %Prover{name: :vampire} = Prover.builtin("vampire")
+  end
+
+  test "Prover.normalize/1 raises for unknown prover names instead of creating atoms" do
+    assert_raise ArgumentError, fn -> Prover.normalize("nonexistent_prover_xyz") end
+  end
+
+  test "LocalDb reads from the requested file even if another DETS file is already open" do
+    tmp = Path.join(System.tmp_dir!(), "atp_local_db_paths_#{System.unique_integer([:positive])}")
+
+    other =
+      Path.join(System.tmp_dir!(), "atp_local_db_other_#{System.unique_integer([:positive])}")
+
+    run_a =
+      Run.new(id: "alpha", problems: [Problem.new(id: "p1", name: "p1")], provers: [:tableaux])
+
+    run_b =
+      Run.new(id: "beta", problems: [Problem.new(id: "p2", name: "p2")], provers: [:tableaux])
+
+    AtpBenchmarkRunner.save_to_db!(
+      run_a,
+      [Result.new(problem_id: "p1", prover: :tableaux, szs_status: "Theorem")],
+      %{},
+      dir: tmp
+    )
+
+    AtpBenchmarkRunner.save_to_db!(
+      run_b,
+      [Result.new(problem_id: "p2", prover: :tableaux, szs_status: "Theorem")],
+      %{},
+      dir: other
+    )
+
+    assert [%{id: "alpha", problem_count: 1}] = AtpBenchmarkRunner.list_db_runs(dir: tmp)
+    assert [%{id: "beta", problem_count: 1}] = AtpBenchmarkRunner.list_db_runs(dir: other)
+
+    assert [record] = AtpBenchmarkRunner.load_db_results!("alpha", dir: tmp)
+    assert record.problem_id == "p1"
+  end
+
+  test "Scheduler.runner_args/1 returns a documented nightly job argument map" do
+    args =
+      AtpBenchmarkRunner.Scheduler.runner_args(
+        module: "MyApp.AtpNightly",
+        function: "run",
+        args: [%{"cluster" => "fritz"}],
+        cluster: "fritz",
+        provers: ["vampire"]
+      )
+
+    assert args["cluster"] == "fritz"
+    assert args["provers"] == ["vampire"]
+    assert args["runner_mfa"]["module"] == "MyApp.AtpNightly"
+    assert args["runner_mfa"]["function"] == "run"
+    assert args["runner_mfa"]["args"] == [%{"cluster" => "fritz"}]
+  end
+
   test "ignores unknown persisted keys without creating dynamic top-level atoms" do
     new_run =
       Run.new(%{
