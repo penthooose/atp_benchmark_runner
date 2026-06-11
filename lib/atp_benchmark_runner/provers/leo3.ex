@@ -33,6 +33,7 @@ defmodule AtpBenchmarkRunner.Provers.Leo3 do
       image_name: "leo3",
       def_path: "priv/provers/leo3/apptainer.def",
       docker_image: "aise/atp-leo3:latest",
+      dockerfile_path: "priv/provers/leo3/Dockerfile",
       homepage: "https://github.com/leoprover/Leo-III",
       source_url: "https://github.com/leoprover/Leo-III",
       license: "BSD-3-Clause",

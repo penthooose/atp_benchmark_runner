@@ -1,5 +1,13 @@
 # ATP Benchmark Runner smoke workflow
 
+```elixir
+Mix.install([
+  {:atp_benchmark_runner, path: "item_14_ATP_Benchmark_Runner/atp_benchmark_runner", force: true}
+])
+```
+
+## Section
+
 This notebook demonstrates the intended local/Livebook workflow:
 
 1. configure local TPTP storage or Livebook cache
@@ -9,14 +17,6 @@ This notebook demonstrates the intended local/Livebook workflow:
 5. monitor progress and render a report
 
 It is intentionally conservative: cells default to bundled smoke examples and dry-run planning until you provide a real `hpc_connect` session.
-
-## Install local project
-
-```elixir
-Mix.install([
-  {:atp_benchmark_runner, path: Path.expand("..", __DIR__)}
-])
-```
 
 ## Prepare TPTP problems
 

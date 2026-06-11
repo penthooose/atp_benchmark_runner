@@ -34,6 +34,7 @@ defmodule AtpBenchmarkRunner.Provers.CVC5 do
       image_name: "cvc5",
       def_path: "priv/provers/cvc5/apptainer.def",
       docker_image: "aise/atp-cvc5:latest",
+      dockerfile_path: "priv/provers/cvc5/Dockerfile",
       homepage: "https://cvc5.github.io/",
       source_url: "https://github.com/cvc5/cvc5",
       license: "BSD-3-Clause style",

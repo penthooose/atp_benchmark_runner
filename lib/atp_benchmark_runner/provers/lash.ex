@@ -33,6 +33,7 @@ defmodule AtpBenchmarkRunner.Provers.Lash do
       image_name: "lash",
       def_path: "priv/provers/lash/apptainer.def",
       docker_image: "aise/atp-lash:latest",
+      dockerfile_path: "priv/provers/lash/Dockerfile",
       homepage: "http://grid01.ciirc.cvut.cz/~chad/lash/",
       source_url: "http://grid01.ciirc.cvut.cz/~chad/lash/",
       license: "unknown",

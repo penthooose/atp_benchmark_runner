@@ -46,7 +46,7 @@ defmodule AtpBenchmarkRunnerTest do
 
     installed = AtpBenchmarkRunner.install_tptp_examples!(root_dir: tmp)
 
-    assert length(installed) == 3
+    assert length(installed) == 6
 
     problems =
       AtpBenchmarkRunner.load_tptp_problems(
@@ -58,8 +58,11 @@ defmodule AtpBenchmarkRunnerTest do
         limit: 10
       )
 
-    assert [%Problem{name: "PUZ001+0", logic: "FOF", domain: "PUZ"} = problem] = problems
-    assert problem.rating == 0.0
+    puz = Enum.find(problems, &(&1.name == "PUZ001+0"))
+    assert puz != nil
+    assert puz.logic == "FOF"
+    assert puz.domain == "PUZ"
+    assert puz.rating == 0.0
   end
 
   test "selects TPTP files from GUI form data without downloading by default" do
@@ -164,8 +167,10 @@ defmodule AtpBenchmarkRunnerTest do
 
     assert manifest.kind == "Job"
 
-    assert [%{image: "aise/atp-cvc5:latest", args: [arg]}] =
+    assert [%{image: img, args: [arg]}] =
              manifest.spec.template.spec.containers
+
+    assert img == "aise/atp-cvc5:latest"
 
     assert arg =~ "timeout --preserve-status 15s cvc5"
     assert arg =~ "'/problems/demo.p'"

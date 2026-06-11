@@ -1,0 +1,19 @@
+# E-Prover Docker image (built from source with HO support).
+#   docker build -t aise/atp-eprover:latest priv/provers/eprover/
+#   docker run --rm aise/atp-eprover:latest --auto-schedule --proof-object --cpu-limit=30 /problems/problem.p
+FROM ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates git build-essential gawk make perl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/eprover/eprover.git /opt/eprover
+WORKDIR /opt/eprover
+RUN ./configure --enable-ho --bindir=/usr/local/bin && make rebuild && make install
+
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/bin/eprover-ho /usr/local/bin/eprover-ho
+ENTRYPOINT ["eprover-ho"]

@@ -20,7 +20,14 @@ defmodule AtpBenchmarkRunner do
     Workflow
   }
 
-  alias AtpBenchmarkRunner.HPC.{ImageSmokeTest, Images, Results, Submitter, TPTPSync}
+  alias AtpBenchmarkRunner.{
+    LocalRunner,
+    HPC.ImageSmokeTest,
+    HPC.Images,
+    HPC.Results,
+    HPC.Submitter,
+    HPC.TPTPSync
+  }
 
   @doc """
   Creates a benchmark run manifest.
@@ -190,6 +197,28 @@ defmodule AtpBenchmarkRunner do
   """
   @spec report([Result.t() | map()], Run.t() | nil, keyword()) :: map()
   def report(results, run \\ nil, opts \\ []), do: Report.summarize(results, run, opts)
+
+  @doc """
+  Runs all selected provers against all selected problems locally (sequentially).
+  """
+  @spec local_benchmark(
+          [Prover.t() | atom() | binary()],
+          [AtpBenchmarkRunner.Problem.t() | binary()],
+          keyword()
+        ) :: [Result.t()]
+  def local_benchmark(provers, problems, opts \\ []),
+    do: LocalRunner.run_benchmark(provers, problems, opts)
+
+  @doc """
+  Runs a single prover against a single problem locally.
+  """
+  @spec local_run_single(
+          Prover.t() | atom() | binary(),
+          AtpBenchmarkRunner.Problem.t() | binary(),
+          keyword()
+        ) :: Result.t()
+  def local_run_single(prover, problem, opts \\ []),
+    do: LocalRunner.run_single(prover, problem, opts)
 
   @doc """
   Compares two stored runs and returns longitudinal new-solve/regression deltas.

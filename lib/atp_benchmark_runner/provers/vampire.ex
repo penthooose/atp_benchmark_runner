@@ -33,6 +33,7 @@ defmodule AtpBenchmarkRunner.Provers.Vampire do
       image_name: "vampire",
       def_path: "priv/provers/vampire/apptainer.def",
       docker_image: "aise/atp-vampire:latest",
+      dockerfile_path: "priv/provers/vampire/Dockerfile",
       homepage: "https://vprover.github.io/",
       source_url: "https://github.com/vprover/vampire",
       license: "BSD-3-Clause",

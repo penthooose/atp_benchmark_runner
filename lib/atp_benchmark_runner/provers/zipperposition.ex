@@ -37,6 +37,7 @@ defmodule AtpBenchmarkRunner.Provers.Zipperposition do
       image_name: "zipperposition",
       def_path: "priv/provers/zipperposition/apptainer.def",
       docker_image: "aise/atp-zipperposition:latest",
+      dockerfile_path: "priv/provers/zipperposition/Dockerfile",
       homepage: "https://github.com/sneeuwballen/zipperposition",
       source_url: "https://github.com/sneeuwballen/zipperposition",
       license: "BSD-2-Clause",
