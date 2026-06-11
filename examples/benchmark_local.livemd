@@ -6,13 +6,6 @@ Mix.install([
 ])
 ```
 
-This notebook runs an ATP benchmark **locally** on the development machine.
-Provers that are not natively installed are reported as `GaveUp` with a clear
-message. The tableaux solver (item #12) is the only one expected to work
-out-of-the-box after building its escript.
-
----
-
 ## 1. Detect available execution methods
 
 ```elixir
@@ -39,12 +32,12 @@ end)
 ```
 
 > **Available provers:**
->
-> - **`:tableaux`** — uses the local escript (always available after `mix escript.build` in item #12)
-> - **`:eprover`** — Docker image can be built from `priv/provers/eprover/Dockerfile`
-> - **`:vampire`** — Docker image can be built from `priv/provers/vampire/Dockerfile`
-> - **`:cvc5`**, **`:zipperposition`**, **`:leo3`**, **`:leo2`**, **`:lash`** — Docker images via their Dockerfiles
->
+> 
+> * **`:tableaux`** — uses the local escript (always available after `mix escript.build` in item #12)
+> * **`:eprover`** — Docker image can be built from `priv/provers/eprover/Dockerfile`
+> * **`:vampire`** — Docker image can be built from `priv/provers/vampire/Dockerfile`
+> * **`:cvc5`**, **`:zipperposition`**, **`:leo3`**, **`:leo2`**, **`:lash`** — Docker images via their Dockerfiles
+> 
 > Native binaries of the reference provers are not distributed for Windows. All
 > run inside containers — the same binaries used on HPC via Apptainer.
 
@@ -57,31 +50,61 @@ downloads dependencies and may take a few minutes; subsequent runs are instant.
 
 ```elixir
 # Select which prover images to build
-build_provers = [:eprover, :vampire]
+build_provers = [:eprover, :vampire, :cvc5, :zipperposition, :leo3]
 
 IO.puts("Ensuring Docker images for: #{inspect(build_provers)}")
 IO.puts("")
 
-Enum.each(build_provers, fn name ->
+results = Enum.map(build_provers, fn name ->
   status = AtpBenchmarkRunner.LocalRunner.docker_image_status(name)
   IO.puts("#{name}: #{status}")
 
   case status do
-    :available -> IO.puts("  ✅ Image already available")
+    :available ->
+      IO.puts("  ✅ Image already available")
+      {:ok, name}
+
     :needs_build ->
       IO.puts("  🏗️ Building Docker image...")
-      AtpBenchmarkRunner.LocalRunner.ensure_docker_image!(name)
-      IO.puts("  ✅ Done")
+      result = try do
+        AtpBenchmarkRunner.LocalRunner.ensure_docker_image!(name)
+        {:ok, name}
+      rescue
+        e -> {:error, name, Exception.message(e)}
+      end
+      case result do
+        {:ok, _} -> IO.puts("  ✅ Done")
+        {:error, _, msg} -> IO.puts("  ❌ Failed: #{String.slice(msg, 0, 200)}")
+      end
+      result
+
     :needs_pull ->
       IO.puts("  📥 Pulling from registry...")
-      AtpBenchmarkRunner.LocalRunner.ensure_docker_image!(name)
-      IO.puts("  ✅ Done")
+      result = try do
+        AtpBenchmarkRunner.LocalRunner.ensure_docker_image!(name)
+        {:ok, name}
+      rescue
+        e -> {:error, name, Exception.message(e)}
+      end
+      case result do
+        {:ok, _} -> IO.puts("  ✅ Done")
+        {:error, _, msg} -> IO.puts("  ❌ Failed: #{String.slice(msg, 0, 200)}")
+      end
+      result
+
     :unavailable ->
       IO.puts("  ❌ No Dockerfile or image defined")
+      {:error, name, "no Dockerfile"}
   end
 end)
 
-IO.puts("\nAll selected images ready.")
+success = Enum.count(results, &match?({:ok, _}, &1))
+failure = Enum.count(results, &match?({:error, _}, &1))
+IO.puts("\n#{success} built, #{failure} failed")
+
+if failure > 0 do
+  IO.puts("Failed provers: #{Enum.map_join(Enum.filter(results, &match?({:error, _, _}, &1)), ", ", fn {:error, name, _} -> name end)}")
+end
 ```
 
 ---
@@ -140,9 +163,9 @@ available (built in step 2) are automatically detected and run via Docker.
 # provers built in step 2 will be detected and used automatically.
 # Uncomment any that have a ✅ available or were built above.
 selected_provers = [
-  :tableaux,
-  :eprover
-  # :vampire,
+  # :tableaux,
+  # :eprover
+  :vampire,
   # :cvc5,
   # :zipperposition,
   # :leo3,

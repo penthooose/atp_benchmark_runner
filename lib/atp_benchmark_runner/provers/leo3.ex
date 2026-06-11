@@ -16,7 +16,8 @@ defmodule AtpBenchmarkRunner.Provers.Leo3 do
       kind: :apptainer,
       sif_name: "leo3",
       executable: "leo3",
-      command_template: "apptainer exec {sif_path} leo3 --timeout {timeout_seconds} {problem}",
+      command_template:
+        "apptainer exec {sif_path} leo3 {problem} --atp-timout cpu={timeout_seconds}",
       metadata: %{
         aliases: [:leo_iii],
         logics: ["THF", "TFF", "FOF", "rank-1 polymorphic TPTP"],

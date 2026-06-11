@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: ocaml/opam:ubuntu-22.04-ocaml-4.14
+From: ocaml/opam:ubuntu-22.04-ocaml-4.12
 
 %labels
     Maintainer AISE Bamberg

@@ -9,25 +9,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl build-essential make ocaml \
     && rm -rf /var/lib/apt/lists/*
 
+# Always create a stub first, then try to overwrite with real binary
+RUN printf '#!/bin/sh\necho "Lash binary not available (source URL 404)." >&2\nexit 127\n' > /usr/local/bin/lash; \
+    chmod +x /usr/local/bin/lash
+
 RUN mkdir -p /opt/lash && \
-    curl -fL "${LASH_URL}" -o /tmp/lash.tar.gz && \
-    tar -xzf /tmp/lash.tar.gz -C /opt/lash --strip-components=1 || true
+    curl -fL "${LASH_URL}" -o /tmp/lash.tar.gz 2>/dev/null && \
+    tar -xzf /tmp/lash.tar.gz -C /opt/lash --strip-components=1 2>/dev/null || true
 
 WORKDIR /opt/lash
-RUN if [ -f Makefile ] || [ -f makefile ]; then make || true; \
-    elif [ -f configure ]; then ./configure && make || true; fi
+RUN if [ -f Makefile ] || [ -f makefile ]; then make 2>&1 || true; \
+    elif [ -f configure ]; then ./configure && make 2>&1 || true; fi
 
-RUN candidate="$(find /opt/lash -maxdepth 3 -type f \( -name 'lash' -o -name 'lash.opt' -o -name 'lash.byte' \) | head -1)" && \
-    if [ -n "$candidate" ]; then cp "$candidate" /usr/local/bin/lash; fi
+RUN candidate="$(find /opt/lash -maxdepth 3 -type f \( -name 'lash' -o -name 'lash.opt' -o -name 'lash.byte' \) | head -1)"; \
+    if [ -n "$candidate" ]; then \
+    cp "$candidate" /usr/local/bin/lash; \
+    chmod +x /usr/local/bin/lash; \
+    echo "Lash built from source: $candidate"; \
+    else \
+    echo "Lash source not available, using stub"; \
+    fi
 
 FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ocaml-runtime \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY --from=builder /usr/local/bin/lash /usr/local/bin/lash
-RUN if [ ! -x /usr/local/bin/lash ]; then \
-    printf '#!/bin/sh\necho "Lash binary not built. Pin LASH_URL build-arg." >&2\nexit 127\n' > /usr/local/bin/lash; \
-    chmod +x /usr/local/bin/lash; \
-    fi
 ENTRYPOINT ["lash"]

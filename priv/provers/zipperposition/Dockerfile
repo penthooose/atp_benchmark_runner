@@ -1,7 +1,7 @@
 # Zipperposition Docker image (OCaml/opam-based build).
 #   docker build -t aise/atp-zipperposition:latest priv/provers/zipperposition/
 #   docker run --rm aise/atp-zipperposition:latest --mode best --timeout 30 /problems/problem.p
-FROM ocaml/opam:ubuntu-22.04-ocaml-4.14 AS builder
+FROM ocaml/opam:ubuntu-22.04-ocaml-4.12 AS builder
 RUN sudo apt-get update && sudo apt-get install -y --no-install-recommends \
     ca-certificates git libgmp-dev m4 pkg-config python3 \
     && sudo rm -rf /var/lib/apt/lists/*

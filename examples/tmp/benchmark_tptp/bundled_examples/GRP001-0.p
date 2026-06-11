@@ -2,10 +2,10 @@
 % Domain   : Group Theory
 % Status   : Unsatisfiable
 % Rating   : 0.00
-% SPC      : CNF_UNS_EPR_NEQ
+% SPC      : FOF_UNS_RFO_NEQ
 
-cnf(unit_a,axiom,
+fof(unit_a,axiom,
     ( a )).
 
-cnf(unit_not_a,axiom,
+fof(unit_not_a,axiom,
     ( ~ a )).

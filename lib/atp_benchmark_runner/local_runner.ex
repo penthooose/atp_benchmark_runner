@@ -165,10 +165,11 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     problems = normalize_problems(problems)
     timeout_seconds = Keyword.get(opts, :timeout_seconds, 60)
     include_raw_output = Keyword.get(opts, :include_raw_output, false)
+    verbose = Keyword.get(opts, :verbose, false)
 
     Enum.flat_map(provers, fn prover ->
       Enum.map(problems, fn problem ->
-        run_one(prover, problem, timeout_seconds, include_raw_output)
+        run_one(prover, problem, timeout_seconds, include_raw_output, verbose)
       end)
     end)
   end
@@ -184,7 +185,8 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     problem_mod = normalize_problem(problem)
     timeout_seconds = Keyword.get(opts, :timeout_seconds, 60)
     include_raw_output = Keyword.get(opts, :include_raw_output, false)
-    run_one(prover_mod, problem_mod, timeout_seconds, include_raw_output)
+    verbose = Keyword.get(opts, :verbose, false)
+    run_one(prover_mod, problem_mod, timeout_seconds, include_raw_output, verbose)
   end
 
   @doc """
@@ -293,7 +295,13 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
   # --- Prover execution ---
 
-  defp run_one(%Prover{name: :tableaux} = prover, %Problem{} = problem, timeout_seconds, raw?) do
+  defp run_one(
+         %Prover{name: :tableaux} = prover,
+         %Problem{} = problem,
+         timeout_seconds,
+         raw?,
+         _verbose
+       ) do
     problem_path = problem.path || problem.name
     problem_id = problem.id
 
@@ -317,11 +325,11 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     )
   end
 
-  defp run_one(%Prover{} = prover, %Problem{} = problem, timeout_seconds, raw?) do
+  defp run_one(%Prover{} = prover, %Problem{} = problem, timeout_seconds, raw?, verbose) do
     problem_path = problem.path || problem.name
     problem_id = problem.id
 
-    case try_docker_or_native(prover, problem_path, timeout_seconds) do
+    case try_docker_or_native(prover, problem_path, timeout_seconds, verbose) do
       {:ok, output, exit_status, wall_time_ms} ->
         Result.from_output(prover.name, problem_id, output,
           prover: prover.name,
@@ -346,13 +354,13 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     end
   end
 
-  defp try_docker_or_native(prover, problem_path, timeout_seconds) do
+  defp try_docker_or_native(prover, problem_path, timeout_seconds, verbose) do
     command = Prover.render_command(prover, problem_path, timeout_seconds: timeout_seconds)
 
     if String.starts_with?(command, "apptainer ") do
       # Try running via Docker as a fallback for containerized provers
       if detect_docker_available() do
-        run_via_docker(prover, problem_path, command, timeout_seconds)
+        run_via_docker(prover, problem_path, command, timeout_seconds, verbose)
       else
         # Try native binary stripped of apptainer prefix
         run_native_stripped(command)
@@ -391,7 +399,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     end
   end
 
-  defp run_via_docker(prover, problem_path, apptainer_command, timeout_seconds) do
+  defp run_via_docker(prover, problem_path, apptainer_command, timeout_seconds, verbose) do
     container = prover_metadata(prover.name) |> Map.get(:container)
 
     case container do
@@ -417,44 +425,110 @@ defmodule AtpBenchmarkRunner.LocalRunner do
             {:gaveup, "Docker image not available for prover '#{prover.name}'"}
 
           :available ->
-            run_docker_container(prover, problem_path, img, apptainer_command, timeout_seconds)
+            run_docker_container(
+              prover,
+              problem_path,
+              img,
+              apptainer_command,
+              timeout_seconds,
+              verbose
+            )
         end
     end
   end
 
-  defp run_docker_container(prover, problem_path, image, _rendered_command, timeout_seconds) do
-    problem_dir = problem_path |> Path.dirname() |> Path.expand()
-    problem_file = Path.basename(problem_path)
+  @doc false
+  def docker_path(path) do
+    # Docker Desktop on Windows needs Unix-style paths: C:\foo → /c/foo
+    case :os.type() do
+      {:win32, _} ->
+        unix_path = String.replace(path, "\\", "/")
 
-    # Use the prover's command TEMPLATE (before rendering) to extract args.
-    # This avoids parsing the rendered command which has the full quoted path.
-    tmpl = prover.command_template
+        case Regex.run(~r/^([A-Za-z]):(\/.*)$/, unix_path) do
+          [_, drive, rest] -> "/#{String.downcase(drive)}#{rest}"
+          _ -> unix_path
+        end
 
-    # Format: "apptainer exec {sif_path} <exe> <args> {problem}"
-    # Strip "apptainer exec {sif_path}" prefix and the executable name
+      _ ->
+        path
+    end
+  end
+
+  defp run_docker_container(
+         prover,
+         problem_path,
+         image,
+         _rendered_command,
+         timeout_seconds,
+         verbose
+       ) do
+    problem_id = Path.rootname(problem_path) |> Path.basename()
+    problem_basename = Path.basename(problem_path, ".p")
+
+    # Special handling for CVC5: convert TPTP → SMT-LIB before running
+    {mount_dir, mount_file} =
+      if prover.name == :cvc5 do
+        smt_content = AtpBenchmarkRunner.TPTPToSMT.convert_file!(problem_path)
+        smt_dir = Path.join(System.tmp_dir!(), "atp_smt_converted")
+        File.mkdir_p!(smt_dir)
+        smt_name = "#{problem_basename}.smt2"
+        File.write!(Path.join(smt_dir, smt_name), smt_content)
+        {docker_path(smt_dir), smt_name}
+      else
+        dir = problem_path |> Path.dirname() |> Path.expand() |> docker_path()
+        file = Path.basename(problem_path)
+        {dir, file}
+      end
+
+    # Build Docker args from the prover's command template
     rest =
-      tmpl
+      prover.command_template
       |> String.replace_prefix("apptainer exec ", "")
       |> String.trim()
       |> String.split(" ", trim: true)
-      # drop {sif_path} and executable
       |> Enum.drop(2)
 
     prover_args =
       Enum.map(rest, fn arg ->
         arg
-        |> String.replace("{problem}", "/problems/#{problem_file}")
+        |> String.replace("{problem}", "/problems/#{mount_file}")
         |> String.replace("{timeout_seconds}", to_string(timeout_seconds))
         |> String.replace("{timeout_ms}", to_string(timeout_seconds * 1_000))
         |> String.replace("{sif_path}", "/dev/null")
       end)
 
     docker_args =
-      ["run", "--rm", "-v", "#{problem_dir}:/problems:ro", image] ++ prover_args
+      ["run", "--rm", "-v", "#{mount_dir}:/problems:ro", image] ++ prover_args
+
+    if verbose do
+      IO.puts("")
+      IO.puts("🐳 [#{problem_id}] docker #{Enum.join(docker_args, " ")}")
+    end
 
     wall_start = System.monotonic_time(:millisecond)
     {output, exit_code} = run_cmd("docker", docker_args, [])
     wall_end = System.monotonic_time(:millisecond)
+
+    # Wrap CVC5 output in SZS format for compatibility with result parsing
+    output =
+      if prover.name == :cvc5 do
+        trimmed = String.trim(output)
+        szs_status =
+          case trimmed do
+            "sat" -> "Satisfiable"
+            "unsat" -> "Unsatisfiable"
+            "unknown" -> "Unknown"
+            _ -> nil
+          end
+
+        if szs_status do
+          "% SZS status #{szs_status}\n"
+        else
+          output
+        end
+      else
+        output
+      end
 
     {:ok, output, exit_code, wall_end - wall_start}
   end
