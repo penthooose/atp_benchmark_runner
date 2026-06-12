@@ -1,6 +1,7 @@
 # Local ATP Benchmark
 
 ```elixir
+System.put_env("HEX_UNSAFE_HTTPS", "1")
 Mix.install([
   {:atp_benchmark_runner, path: "item_14_ATP_Benchmark_Runner/atp_benchmark_runner", force: true}
 ])
