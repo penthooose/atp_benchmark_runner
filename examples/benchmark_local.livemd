@@ -1,10 +1,14 @@
 # Local ATP Benchmark
 
 ```elixir
-System.put_env("HEX_UNSAFE_HTTPS", "1")
 Mix.install([
-  {:atp_benchmark_runner, path: "item_14_ATP_Benchmark_Runner/atp_benchmark_runner", force: true}
+  {:kino, "~> 0.19"},
+	{:table, "0.1.2"},
+	{:hpc_connect, github: "penthooose/hpc_connect", force: true},
+  {:atp_benchmark_runner, github: "penthooose/atp_benchmark_runner", force: true}
 ])
+
+#   {:atp_benchmark_runner, path: "item_14_ATP_Benchmark_Runner/atp_benchmark_runner", force: true}
 ```
 
 ## 1. Detect available execution methods
