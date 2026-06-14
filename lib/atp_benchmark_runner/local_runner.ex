@@ -157,6 +157,40 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   Runs all selected provers against all selected problems sequentially.
 
   Returns a flat list of `Result` structs, one per (prover, problem) pair.
+
+  ## Execution Strategy
+
+  By default (`execution_strategy: :sequential_containers`), the runner uses
+  sequential container execution:
+
+    * All problems run for prover A before switching to prover B
+    * Each container/image is loaded once per prover, reducing overhead
+    * This is optimal for local Docker execution
+
+  ## Options
+
+    * `:timeout_seconds` — per-problem wall time limit (default: 60)
+    * `:include_raw_output` — include full stdout in results (default: false)
+    * `:verbose` — print Docker CLI invocations (default: false)
+    * `:auto_ensure_images` — automatically pull/build missing Docker images
+      before running (default: false). When true, the build/pull output is
+      printed to stdout so you can see progress during a benchmark run.
+    * `:execution_strategy` — execution pattern: `:sequential_containers`
+      (default) runs all problems for one prover before switching to the next
+
+  ## Examples
+
+      # Sequential container execution (default)
+      results = LocalRunner.run_benchmark(provers, problems,
+        timeout_seconds: 120,
+        auto_ensure_images: true
+      )
+
+      # Explicit sequential strategy
+      results = LocalRunner.run_benchmark(provers, problems,
+        timeout_seconds: 120,
+        execution_strategy: :sequential_containers
+      )
   """
   @spec run_benchmark([Prover.t() | atom() | binary()], [Problem.t() | binary()], keyword()) ::
           [Result.t()]
@@ -166,12 +200,50 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     timeout_seconds = Keyword.get(opts, :timeout_seconds, 60)
     include_raw_output = Keyword.get(opts, :include_raw_output, false)
     verbose = Keyword.get(opts, :verbose, false)
+    auto_ensure = Keyword.get(opts, :auto_ensure_images, false)
+    execution_strategy = Keyword.get(opts, :execution_strategy, :sequential_containers)
 
-    Enum.flat_map(provers, fn prover ->
-      Enum.map(problems, fn problem ->
-        run_one(prover, problem, timeout_seconds, include_raw_output, verbose)
+    # Pre-ensure Docker images for all provers that need it
+    if auto_ensure do
+      Enum.each(provers, fn prover ->
+        if prover.name != :tableaux do
+          container = prover_metadata(prover.name) |> Map.get(:container)
+
+          if container && container.docker_image do
+            case docker_image_status(prover.name) do
+              :needs_build ->
+                IO.puts("🏗️  Auto-building Docker image for #{prover.name}...")
+                ensure_docker_image!(prover.name)
+                IO.puts("   ✅ Done")
+
+              :needs_pull ->
+                IO.puts("📥 Auto-pulling Docker image for #{prover.name}...")
+                ensure_docker_image!(prover.name)
+                IO.puts("   ✅ Done")
+
+              _ ->
+                :ok
+            end
+          end
+        end
       end)
-    end)
+    end
+
+    case execution_strategy do
+      :sequential_containers ->
+        # Run all problems for one prover before switching to next prover
+        # This reduces container loading times since each container starts once
+        Enum.flat_map(provers, fn prover ->
+          Enum.map(problems, fn problem ->
+            run_one(prover, problem, timeout_seconds, include_raw_output, verbose)
+          end)
+        end)
+
+      _ ->
+        raise ArgumentError,
+              "Unknown execution strategy: #{inspect(execution_strategy)}. " <>
+                "Expected :sequential_containers."
+    end
   end
 
   @doc """
@@ -513,6 +585,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     output =
       if prover.name == :cvc5 do
         trimmed = String.trim(output)
+
         szs_status =
           case trimmed do
             "sat" -> "Satisfiable"

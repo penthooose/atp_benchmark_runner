@@ -46,7 +46,7 @@ defmodule AtpBenchmarkRunnerTest do
 
     installed = AtpBenchmarkRunner.install_tptp_examples!(root_dir: tmp)
 
-    assert length(installed) == 6
+    assert length(installed) == 12
 
     problems =
       AtpBenchmarkRunner.load_tptp_problems(

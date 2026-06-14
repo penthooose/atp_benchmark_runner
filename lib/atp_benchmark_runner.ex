@@ -10,6 +10,7 @@ defmodule AtpBenchmarkRunner do
   alias AtpBenchmarkRunner.{
     Compare,
     Notification,
+    Problem,
     Prover,
     Provers,
     Report,
@@ -199,6 +200,177 @@ defmodule AtpBenchmarkRunner do
   def report(results, run \\ nil, opts \\ []), do: Report.summarize(results, run, opts)
 
   @doc """
+  Creates a benchmark plan (Run struct) from provers, problems, and execution options.
+
+  This is the main entry point for configuring a benchmark without running it.
+  Use `run_benchmark/1` to execute the plan.
+
+  ## Modes
+
+  ### :local (default)
+  Runs provers sequentially, with each prover running all problems before
+  switching to the next prover. This reduces container loading times since
+  each container is started once and reused for all problems.
+
+      plan = AtpBenchmarkRunner.bootstrap(provers, problems, mode: :local)
+      results = AtpBenchmarkRunner.run_benchmark(plan)
+
+  ### :hpc
+  Runs provers in parallel on HPC resources, with one prover per compute node.
+  Requires `hpc_connect` session and cluster configuration.
+
+      plan = AtpBenchmarkRunner.bootstrap(session, provers, problems, mode: :hpc)
+      results = AtpBenchmarkRunner.run_benchmark(plan)
+
+  ## HPC Modes (when mode: :hpc)
+
+    * `:single_node` - All provers run on a single compute node (default)
+    * `:multi_node` - Each prover runs on a separate compute node
+
+  ## Options
+
+    * `:mode` — Execution mode: `:local` or `:hpc` (default: `:local`)
+    * `:hpc_mode` — HPC execution mode: `:single_node` or `:multi_node` (default: `:single_node`)
+    * `:timeout_seconds` — Per-problem wall time limit (default: 60)
+    * `:include_raw_output` — Include full stdout in results (default: false)
+    * `:auto_ensure_images` — Automatically pull/build missing Docker images (default: false)
+  """
+  @spec bootstrap(
+          HpcConnect.Session.t() | [Prover.t() | atom() | binary()],
+          [Prover.t() | atom() | binary()] | [AtpBenchmarkRunner.Problem.t() | binary()],
+          keyword()
+        ) :: Run.t()
+  def bootstrap(provers_or_session, problems_or_provers, opts \\ []) do
+    mode = Keyword.get(opts, :mode, :local)
+
+    case mode do
+      :local ->
+        provers = normalize_provers(provers_or_session)
+        problems = normalize_problems(problems_or_provers)
+
+        Run.new(
+          title: Keyword.get(opts, :title, "Benchmark run"),
+          problems: problems,
+          provers: provers,
+          problem_timeout_seconds: Keyword.get(opts, :timeout_seconds, 60),
+          metadata: Map.new(opts) |> Map.put(:mode, mode)
+        )
+
+      :hpc ->
+        raise ArgumentError,
+              "HPC mode requires 3 arguments: session, provers, and problems. " <>
+                "Call as: AtpBenchmarkRunner.bootstrap(session, provers, problems, mode: :hpc)"
+
+      _ ->
+        raise ArgumentError,
+              "Unknown mode: #{inspect(mode)}. Expected :local or :hpc."
+    end
+  end
+
+  @doc """
+  Creates a benchmark plan for HPC execution with a session.
+
+      plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
+               mode: :hpc,
+               hpc_mode: :multi_node
+             )
+      results = AtpBenchmarkRunner.run_benchmark(plan)
+  """
+  @spec bootstrap(
+          HpcConnect.Session.t(),
+          [Prover.t() | atom() | binary()],
+          [AtpBenchmarkRunner.Problem.t() | binary()],
+          keyword()
+        ) :: Run.t()
+  def bootstrap(session, provers, problems, opts) do
+    mode = Keyword.get(opts, :mode, :hpc)
+    # keep mode check for future validation
+    _ = mode
+
+    hpc_mode = Keyword.get(opts, :hpc_mode, :single_node)
+    provers_norm = normalize_provers(provers)
+    problems_norm = normalize_problems(problems)
+
+    Run.new(
+      title: Keyword.get(opts, :title, "HPC benchmark run"),
+      problems: problems_norm,
+      provers: provers_norm,
+      problem_timeout_seconds: Keyword.get(opts, :timeout_seconds, 60),
+      metadata: %{
+        mode: :hpc,
+        hpc_mode: hpc_mode,
+        session: session
+      }
+    )
+  end
+
+  @doc """
+  Executes a benchmark plan created by `bootstrap/3` or `bootstrap/4`.
+
+  Dispatches to the appropriate runner based on the plan's mode metadata.
+  Prints timing information and returns the list of `Result` structs.
+  """
+  @spec run_benchmark(Run.t()) :: [Result.t()]
+  def run_benchmark(%Run{} = plan) do
+    mode = plan.metadata[:mode] || :local
+
+    {t_ms, results} =
+      :timer.tc(fn ->
+        case mode do
+          :local ->
+            include_raw = Map.get(plan.metadata, :include_raw_output, true)
+            auto_ensure = Map.get(plan.metadata, :auto_ensure_images, false)
+            timeout_seconds = plan.problem_timeout_seconds
+
+            LocalRunner.run_benchmark(plan.provers, plan.problems,
+              timeout_seconds: timeout_seconds,
+              include_raw_output: include_raw,
+              auto_ensure_images: auto_ensure,
+              execution_strategy: plan.metadata[:execution_strategy] || :sequential_containers
+            )
+
+          :hpc ->
+            session = plan.metadata[:session]
+            hpc_mode = plan.metadata[:hpc_mode] || :single_node
+
+            AtpBenchmarkRunner.HPC.Runner.bootstrap(session, plan.provers, plan.problems,
+              hpc_mode: hpc_mode,
+              timeout_seconds: plan.problem_timeout_seconds
+            )
+
+          _ ->
+            raise ArgumentError, "Unknown mode in plan: #{inspect(mode)}"
+        end
+      end)
+
+    elapsed_s = t_ms / 1_000_000
+    IO.puts("Benchmark completed in #{Float.round(elapsed_s, 2)}s")
+    IO.puts("Total results: #{length(results)}")
+    results
+  end
+
+  @doc """
+  Prints a compact Markdown results table for the given results.
+
+      AtpBenchmarkRunner.results_table(results)
+  """
+  @spec results_table([Result.t()]) :: :ok
+  def results_table(results) do
+    IO.puts("| # | Problem | Prover | SZS Status | Wall Time (ms) | Solved? |")
+    IO.puts("|---|---------|--------|------------|-----------------|---------|")
+
+    results
+    |> Enum.with_index(1)
+    |> Enum.each(fn {r, i} ->
+      solved = if Result.solved?(r), do: "✅", else: "❌"
+
+      IO.puts(
+        "| #{i} | #{r.problem_id} | #{r.prover} | #{r.szs_status || "?"} | #{r.wall_time_ms || "?"} | #{solved} |"
+      )
+    end)
+  end
+
+  @doc """
   Runs all selected provers against all selected problems locally (sequentially).
   """
   @spec local_benchmark(
@@ -277,6 +449,13 @@ defmodule AtpBenchmarkRunner do
     do: Store.save_results!(run, results, opts)
 
   @doc """
+  Saves a report with reproducibility metadata.
+  """
+  @spec save_report!(Run.t(), map(), keyword()) :: binary()
+  def save_report!(%Run{} = run, report, opts \\ []),
+    do: Store.save_report!(run, report, opts)
+
+  @doc """
   Stores a run, result list, and report in the local lightweight DB.
   """
   @spec save_to_db!(Run.t(), [Result.t() | map()], map(), keyword()) :: map()
@@ -336,6 +515,108 @@ defmodule AtpBenchmarkRunner do
     do: AtpBenchmarkRunner.GUI.Monitor.panel(session, run, opts)
 
   @doc """
+  Returns a human-readable explanation of a single prover result,
+  including the SZS status, wall time, and proof snippet when available.
+  """
+  @spec explain(Result.t()) :: binary()
+  def explain(%Result{} = result), do: Result.explain(result)
+
+  @doc """
+  Returns a detailed human-readable explanation of a single prover result,
+  including proof snippets when available.
+
+  Accepts a single result or a list of results.
+
+      AtpBenchmarkRunner.explain_full(result)
+      AtpBenchmarkRunner.explain_full(results) |> IO.puts()
+  """
+  @spec explain_full(Result.t() | [Result.t()]) :: binary()
+  def explain_full(%Result{} = result), do: Result.explain_full(result)
+  def explain_full(results) when is_list(results), do: Result.explain_full(results)
+
+  @doc """
+  Finds and displays a proof for a specific prover/problem combination.
+  Prints directly to stdout.
+
+      AtpBenchmarkRunner.show_proof(results, :vampire, "SMT001+0")
+  """
+  @spec show_proof([Result.t()], atom() | binary(), binary()) :: :ok
+  def show_proof(results, prover, problem_id),
+    do: Result.show_proof(results, prover, problem_id)
+
+  @doc """
+  Prints the interesting findings section from a report to stdout.
+
+      report = AtpBenchmarkRunner.report(results)
+      AtpBenchmarkRunner.print_interesting(report)
+  """
+  @spec print_interesting(map()) :: :ok
+  def print_interesting(report), do: Report.print_interesting(report)
+
+  @doc """
+  Prints a complete aggregated report (per-prover, per-problem, interesting) to stdout.
+
+      report = AtpBenchmarkRunner.report(results)
+      AtpBenchmarkRunner.print_report(report)
+  """
+  @spec print_report(map()) :: :ok
+  def print_report(report), do: Report.print(report)
+
+  @doc """
+  Prints the per-prover breakdown table from a report to stdout.
+
+      AtpBenchmarkRunner.print_per_prover(report)
+  """
+  @spec print_per_prover(map()) :: :ok
+  def print_per_prover(report), do: Report.print_per_prover(report)
+
+  @doc """
+  Prints the per-problem comparison table from a report to stdout.
+
+      AtpBenchmarkRunner.print_per_problem(report)
+  """
+  @spec print_per_problem(map()) :: :ok
+  def print_per_problem(report), do: Report.print_per_problem(report)
+
+  @doc """
+  Returns a verbose report for one or more results as a list of explain strings.
+  Useful for debugging or inspecting what each prover actually proved and how.
+
+  ## Options
+
+    * `:prover` — filter to a specific prover atom (e.g. `:eprover`)
+    * `:problem` — filter to a specific problem id
+    * `:solved_only` — only include solved results (default: false)
+    * `:failed_only` — only include failed results (default: false)
+  """
+  @spec verbose_report([Result.t()], keyword()) :: [binary()]
+  def verbose_report(results, opts \\ []) do
+    results
+    |> filter_results(opts)
+    |> Enum.map(&Result.explain/1)
+  end
+
+  defp filter_results(results, opts) do
+    results
+    |> maybe_filter_prover(Keyword.get(opts, :prover))
+    |> maybe_filter_problem(Keyword.get(opts, :problem))
+    |> maybe_filter_solved(Keyword.get(opts, :solved_only))
+    |> maybe_filter_failed(Keyword.get(opts, :failed_only))
+  end
+
+  defp maybe_filter_prover(results, nil), do: results
+  defp maybe_filter_prover(results, prover), do: Enum.filter(results, &(&1.prover == prover))
+
+  defp maybe_filter_problem(results, nil), do: results
+  defp maybe_filter_problem(results, pid), do: Enum.filter(results, &(&1.problem_id == pid))
+
+  defp maybe_filter_solved(results, true), do: Enum.filter(results, &Result.solved?/1)
+  defp maybe_filter_solved(results, _), do: results
+
+  defp maybe_filter_failed(results, true), do: Enum.reject(results, &Result.solved?/1)
+  defp maybe_filter_failed(results, _), do: results
+
+  @doc """
   Builds a notification payload for a completed benchmark report.
   """
   @spec notification_payload(map() | [map()], Run.t() | nil, keyword()) :: map()
@@ -356,4 +637,20 @@ defmodule AtpBenchmarkRunner do
   @spec write_email_summary!(map() | [map()], Run.t() | nil, keyword()) :: binary()
   def write_email_summary!(report_or_results, run \\ nil, opts \\ []),
     do: Notification.write_email_summary!(report_or_results, run, opts)
+
+  # --- Normalization helpers ---
+
+  defp normalize_provers(provers) when is_list(provers) do
+    Enum.map(provers, &normalize_prover/1)
+  end
+
+  defp normalize_prover(%Prover{} = prover), do: prover
+  defp normalize_prover(name) when is_atom(name) or is_binary(name), do: Prover.builtin!(name)
+
+  defp normalize_problems(problems) when is_list(problems) do
+    Enum.map(problems, &normalize_problem/1)
+  end
+
+  defp normalize_problem(%Problem{} = problem), do: problem
+  defp normalize_problem(path) when is_binary(path), do: Problem.from_path(path)
 end

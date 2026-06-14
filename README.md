@@ -22,40 +22,6 @@ delegated to the local `hpc_connect` library from item #15.
 - Provide an optional Oban scheduler boundary for host applications that want nightly runs
 - Emit webhook payloads and email-ready Markdown completion summaries
 
-## Prover integration strategy
-
-The public ecosystem does not currently provide mature Elixir-native bindings for
-Vampire, E, CVC5, Zipperposition, LEO-II, or Leo-III. The robust implementation
-strategy is therefore:
-
-1. **Elixir orchestrates** benchmark configuration, SLURM submission, monitoring,
-   result parsing, and reporting.
-2. **Each prover remains a CLI tool** behind a provider module in
-   `lib/atp_benchmark_runner/provers/`.
-3. **HPC uses Apptainer `.sif` images** built from bundled definitions in
-   `priv/provers/<name>/apptainer.def`.
-4. **Kubernetes remains optional**: `AtpBenchmarkRunner.kubernetes_job/3` can
-   produce a manifest map from the same provider metadata for future cloud runs.
-
-Research summary:
-
-```elixir
-AtpBenchmarkRunner.prover_research_summary()
-```
-
-Image preparation plan:
-
-```elixir
-run = AtpBenchmarkRunner.new_run(problems: ["/remote/TPTP/demo.p"], provers: [:vampire, :eprover])
-AtpBenchmarkRunner.image_plan(run.provers)
-```
-
-Session-aware image build plan:
-
-```elixir
-AtpBenchmarkRunner.image_build_plan(session, run.provers)
-```
-
 ## Apptainer image build workflow
 
 ATP-specific image definitions live in this project under
@@ -123,7 +89,54 @@ problems =
 remote_problems = AtpBenchmarkRunner.sync_tptp_problems!(session, problems)
 ```
 
-## Local / IEx usage
+## Local / Livebook usage
+
+```elixir
+# 1. Bootstrap a plan — does not execute anything
+plan = AtpBenchmarkRunner.bootstrap(provers, problems,
+  mode: :local,
+  timeout_seconds: 120,
+  auto_ensure_images: true
+)
+
+# 2. Run the benchmark — prints timing info
+results = AtpBenchmarkRunner.run_benchmark(plan)
+
+# 3. Results table (markdown table printed to stdout)
+AtpBenchmarkRunner.results_table(results)
+
+# 4. Compact per-result summary
+AtpBenchmarkRunner.verbose_report(results) |> Enum.each(&IO.puts/1)
+
+# 5. Full details with proofs
+AtpBenchmarkRunner.explain_full(results) |> IO.puts()
+
+# 6. Show proof for a specific prover/problem
+AtpBenchmarkRunner.show_proof(results, :vampire, "GRP001-0")
+
+# 7. Aggregated report map (Livebook tables, Markdown, JSON)
+report = AtpBenchmarkRunner.report(results)
+
+# 8. Print report tables to stdout
+AtpBenchmarkRunner.print_per_prover(report)
+AtpBenchmarkRunner.print_per_problem(report)
+AtpBenchmarkRunner.print_interesting(report)
+AtpBenchmarkRunner.print_report(report)  # all of the above
+
+# 9. Persist results
+run = AtpBenchmarkRunner.new_run(title: "Smoke test", problems: problems, provers: provers)
+AtpBenchmarkRunner.save_run!(run)
+AtpBenchmarkRunner.save_results!(run, results)
+AtpBenchmarkRunner.save_report!(run, report)
+
+# 10. Compare with a previous run (longitudinal diff)
+diff = AtpBenchmarkRunner.compare_runs(prev_results, results)
+IO.puts(AtpBenchmarkRunner.diff_markdown(diff))
+```
+
+## HPC / SLURM usage
+
+Requires a configured `hpc_connect` session.
 
 ```elixir
 boot = HpcConnect.bootstrap(mode: :local, env_file: ".env")
@@ -143,8 +156,7 @@ run =
 # Inspect generated scripts without touching the cluster.
 plan = AtpBenchmarkRunner.submit(session, run, dry_run: true)
 
-# Submit for real. Pass prepare_images: true once the bundled Apptainer
-# definitions have been reviewed/pinned for your target cluster.
+# Submit for real.
 submitted = AtpBenchmarkRunner.submit(session, run, dry_run: false, prepare_images: true)
 AtpBenchmarkRunner.monitor(session, submitted)
 
@@ -154,14 +166,13 @@ report = AtpBenchmarkRunner.report(results, submitted)
 AtpBenchmarkRunner.write_email_summary!(report, submitted)
 ```
 
-Webhook completion notifications use `ATP_BENCHMARK_RUNNER_WEBHOOK_URL` or an
-explicit `webhook_url:` option:
+Webhook completion notifications use `ATP_BENCHMARK_RUNNER_WEBHOOK_URL`:
 
 ```elixir
 AtpBenchmarkRunner.send_webhook_notification(report, submitted)
 ```
 
-## Livebook usage
+## Livebook dashboard
 
 ```elixir
 boot =
@@ -178,20 +189,23 @@ The dashboard stores recovery manifests under the cache directory returned by
 `AtpBenchmarkRunner.GUI.Cache.cache_dir/1`. This is deliberate: if a Livebook cell
 is interrupted or recompiled, the submitted job IDs can be recovered from JSON.
 
-See `examples/benchmark_smoke.livemd` for an end-to-end notebook skeleton:
+See `examples/benchmark_local.livemd` for an end-to-end notebook skeleton:
 TPTP selection, image planning/building, job submission, monitoring, collection,
 and report rendering.
 
-## Notes
+## HPC bootstrap modes
 
-- The `hpc_connect` dependency currently uses a local path while item #15 is in
-  active development. `mix.exs` contains the GitHub dependency shape to use once
-  that repository is published.
-- Prover Apptainer images are expected under
-  `<session.work_dir>/singularity_images/<prover>.sif` unless a prover-specific
-  `sif_path` is configured.
-- The bundled definitions are starting templates. Before a production nightly run,
-  build each image once on the target HPC environment and pin any release URLs that
-  upstream projects publish in non-uniform asset names.
-- Remote image builds and smoke validation still need to be exercised on the real
-  target cluster before treating the templates as production-pinned artifacts.
+```elixir
+# Single-node: all provers on one compute node (job array)
+plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
+  mode: :hpc,
+  hpc_mode: :single_node,  # default
+  timeout_seconds: 120
+)
+
+# Multi-node: one prover per compute node
+plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
+  mode: :hpc,
+  hpc_mode: :multi_node
+)
+```

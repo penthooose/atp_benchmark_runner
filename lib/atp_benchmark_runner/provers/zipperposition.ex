@@ -20,7 +20,7 @@ defmodule AtpBenchmarkRunner.Provers.Zipperposition do
       sif_name: "zipperposition",
       executable: "zipperposition",
       command_template:
-        "apptainer exec {sif_path} zipperposition --mode ho-competitive --timeout {timeout_seconds} {problem}",
+        "apptainer exec {sif_path} zipperposition --timeout {timeout_seconds} {problem}",
       metadata: %{
         aliases: [:zipperpin],
         logics: ["FOF", "CNF", "TFF", "lambda-free higher-order"],

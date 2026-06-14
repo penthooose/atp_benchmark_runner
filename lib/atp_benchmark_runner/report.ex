@@ -218,4 +218,120 @@ defmodule AtpBenchmarkRunner.Report do
   defp ratio(part, total), do: part / total
 
   defp timestamp, do: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+  @doc """
+  Prints the interesting findings section (easy failed, hard solved, only ours, only others)
+  directly to stdout. Takes a report map as returned by `summarize/3`.
+
+  ## Examples
+
+      report = AtpBenchmarkRunner.report(results)
+      AtpBenchmarkRunner.Report.print_interesting(report)
+  """
+  @spec print_interesting(map()) :: :ok
+  def print_interesting(report) do
+    interesting = report.interesting
+
+    IO.puts("### Easy problems our prover failed (rating <= 0.3)")
+
+    if interesting.easy_failed_by_ours == [] do
+      IO.puts("  (none) 🎉")
+    else
+      Enum.each(interesting.easy_failed_by_ours, &IO.puts("  - #{&1.problem_id}"))
+    end
+
+    IO.puts("")
+    IO.puts("### Hard problems our prover solved (rating >= 0.7)")
+
+    if interesting.hard_solved_by_ours == [] do
+      IO.puts("  (none)")
+    else
+      Enum.each(interesting.hard_solved_by_ours, &IO.puts("  - #{&1.problem_id}"))
+    end
+
+    IO.puts("")
+    IO.puts("### Solved only by our prover")
+
+    if interesting.only_ours == [] do
+      IO.puts("  (none)")
+    else
+      Enum.each(interesting.only_ours, &IO.puts("  - #{&1.problem_id}"))
+    end
+
+    IO.puts("")
+    IO.puts("### Solved only by reference provers")
+
+    if interesting.only_others == [] do
+      IO.puts("  (none)")
+    else
+      Enum.each(interesting.only_others, &IO.puts("  - #{&1.problem_id}"))
+    end
+
+    :ok
+  end
+
+  @doc """
+  Prints the per-prover breakdown table directly to stdout.
+  Takes a report map as returned by `summarize/3`.
+
+  ## Examples
+
+      report = AtpBenchmarkRunner.report(results)
+      AtpBenchmarkRunner.Report.print_per_prover(report)
+  """
+  @spec print_per_prover(map()) :: :ok
+  def print_per_prover(report) do
+    IO.puts("| Prover | Total | Solved | Failed | Solve Rate |")
+    IO.puts("|--------|------:|-------:|-------:|-----------:|")
+
+    Enum.each(report.by_prover, fn p ->
+      IO.puts(
+        "| #{p.prover} | #{p.total} | #{p.solved} | #{p.failed} | #{Float.round(p.solve_rate * 100, 1)}% |"
+      )
+    end)
+
+    :ok
+  end
+
+  @doc """
+  Prints the per-problem comparison table directly to stdout.
+  Takes a report map as returned by `summarize/3`.
+
+  ## Examples
+
+      report = AtpBenchmarkRunner.report(results)
+      AtpBenchmarkRunner.Report.print_per_problem(report)
+  """
+  @spec print_per_problem(map()) :: :ok
+  def print_per_problem(report) do
+    provers = Enum.map(report.by_prover, & &1.prover)
+
+    IO.puts("| Problem | #{Enum.map_join(provers, " | ", & &1)} |")
+    IO.puts("|---------|#{Enum.map_join(provers, "-|", fn _ -> "------" end)}-|")
+
+    Enum.each(report.by_problem, fn pb ->
+      cells = Enum.map(provers, fn p -> Map.get(pb.statuses, p, "?") end)
+      IO.puts("| #{pb.problem_id} | #{Enum.join(cells, " | ")} |")
+    end)
+
+    :ok
+  end
+
+  @doc """
+  Prints an aggregated report: per-prover breakdown, per-problem comparison,
+  and interesting findings. Takes a report map as returned by `summarize/3`.
+  """
+  @spec print(map()) :: :ok
+  def print(report) do
+    IO.puts("Run ID: #{report.run_id}")
+    IO.puts("Generated: #{report.generated_at}\n")
+    IO.puts(report.markdown)
+    IO.puts("")
+    print_per_prover(report)
+    IO.puts("")
+    print_per_problem(report)
+    IO.puts("")
+    print_interesting(report)
+    :ok
+  end
 end
