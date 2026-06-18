@@ -541,7 +541,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     {mount_dir, mount_file} =
       if prover.name == :cvc5 do
         smt_content = AtpBenchmarkRunner.TPTPToSMT.convert_file!(problem_path)
-        smt_dir = Path.join(System.tmp_dir!(), "atp_smt_converted")
+        smt_dir = AtpBenchmarkRunner.Config.smt_tmp_dir()
         File.mkdir_p!(smt_dir)
         smt_name = "#{problem_basename}.smt2"
         File.write!(Path.join(smt_dir, smt_name), smt_content)

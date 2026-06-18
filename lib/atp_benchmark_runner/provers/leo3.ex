@@ -32,8 +32,8 @@ defmodule AtpBenchmarkRunner.Provers.Leo3 do
     Container.new(%{
       image_name: "leo3",
       def_path: "priv/provers/leo3/apptainer.def",
-      docker_image: "aise/atp-leo3:latest",
-      dockerfile_path: "priv/provers/leo3/Dockerfile",
+      docker_image: "docker.io/aise/atp-leo3:latest",
+      dockerfile_path: "priv/provers/leo3/Containerfile",
       homepage: "https://github.com/leoprover/Leo-III",
       source_url: "https://github.com/leoprover/Leo-III",
       license: "BSD-3-Clause",

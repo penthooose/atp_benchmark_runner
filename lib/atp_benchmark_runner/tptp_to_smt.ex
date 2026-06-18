@@ -10,7 +10,12 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
 
       smt = AtpBenchmarkRunner.TPTPToSMT.convert_file!("problem.p")
       File.write!("problem.smt2", smt)
+
+  The temporary output directory for converted files can be configured via
+  `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` env var or `AtpBenchmarkRunner.Config.smt_tmp_dir/1`.
   """
+
+  alias AtpBenchmarkRunner.Config
 
   @doc """
   Reads a TPTP file and converts it to SMT-LIB format.
@@ -20,6 +25,24 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
     path
     |> File.read!()
     |> convert_string!()
+  end
+
+  @doc """
+  Reads a TPTP file, converts to SMT-LIB, and writes to a temp directory.
+  Returns the path to the written `.smt2` file.
+
+  The temp directory is resolved via `Config.smt_tmp_dir/1`.
+  """
+  @spec convert_file_to_path!(binary(), keyword()) :: binary()
+  def convert_file_to_path!(path, opts \\ []) when is_binary(path) do
+    smt_content = convert_file!(path)
+    smt_dir = Config.smt_tmp_dir(opts)
+    File.mkdir_p!(smt_dir)
+
+    basename = path |> Path.basename(".p") |> Path.basename(".tptp")
+    smt_path = Path.join(smt_dir, "#{basename}.smt2")
+    File.write!(smt_path, smt_content)
+    smt_path
   end
 
   @doc """
@@ -50,25 +73,31 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
   defp merge_multiline_entries(lines) do
     lines
     |> Enum.reduce([], fn line, acc ->
-      is_start = String.starts_with?(line, "fof(") or
-                 String.starts_with?(line, "cnf(") or
-                 String.starts_with?(line, "thf(") or
-                 String.starts_with?(line, "tff(")
+      is_start =
+        String.starts_with?(line, "fof(") or
+          String.starts_with?(line, "cnf(") or
+          String.starts_with?(line, "thf(") or
+          String.starts_with?(line, "tff(")
 
       cond do
         is_start and String.ends_with?(line, ".") ->
           [line | acc]
+
         is_start ->
           ["__MULTI__" <> line | acc]
+
         true ->
           case acc do
             ["__MULTI__" <> buf | rest] ->
-              merged = if String.ends_with?(line, ".") do
-                buf <> " " <> line
-              else
-                "__MULTI__" <> buf <> " " <> line
-              end
+              merged =
+                if String.ends_with?(line, ".") do
+                  buf <> " " <> line
+                else
+                  "__MULTI__" <> buf <> " " <> line
+                end
+
               [merged | rest]
+
             _ ->
               [line | acc]
           end
@@ -123,8 +152,10 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
   defp parse_entry(""), do: nil
   defp parse_entry("fof(" <> rest), do: parse_fof(rest)
   defp parse_entry("cnf(" <> rest), do: parse_cnf(rest)
-  defp parse_entry("thf(" <> _rest), do: nil  # THF not supported
-  defp parse_entry("tff(" <> _rest), do: nil  # TFF not supported yet
+  # THF not supported
+  defp parse_entry("thf(" <> _rest), do: nil
+  # TFF not supported yet
+  defp parse_entry("tff(" <> _rest), do: nil
   defp parse_entry(_), do: nil
 
   defp parse_fof(rest) do
@@ -137,7 +168,9 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
           role: clean_role(role),
           formula: strip_trailing_dot(formula)
         }
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 
@@ -151,7 +184,9 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
           role: clean_role(role),
           formula: strip_trailing_dot(clause)
         }
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 
@@ -166,15 +201,22 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
   end
 
   defp do_split("", acc, current, _depth), do: Enum.reverse([current | acc])
-  defp do_split(")", acc, current, 1), do: do_split(")", acc, current, 0) # handle edge case
+  # handle edge case
+  defp do_split(")", acc, current, 1), do: do_split(")", acc, current, 0)
 
   defp do_split(<<c::utf8, rest::binary>>, acc, current, depth) do
     case c do
-      ?( -> do_split(rest, acc, current <> <<c::utf8>>, depth + 1)
-      ?) -> do_split(rest, acc, current <> <<c::utf8>>, depth - 1)
+      ?( ->
+        do_split(rest, acc, current <> <<c::utf8>>, depth + 1)
+
+      ?) ->
+        do_split(rest, acc, current <> <<c::utf8>>, depth - 1)
+
       ?, when depth == 0 ->
         do_split(rest, [current | acc], "", 0)
-      _ -> do_split(rest, acc, current <> <<c::utf8>>, depth)
+
+      _ ->
+        do_split(rest, acc, current <> <<c::utf8>>, depth)
     end
   end
 
@@ -213,17 +255,35 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
       |> String.split(~r{\s+}, trim: true)
 
     # Known keywords/connectives that should NOT be declared as variables
-    keywords = MapSet.new([
-      "~", "|", "&", "=>", "<=", "<=>", "<~>", "=", "!=",
-      "!", "?", "[", "]", ":", ".",
-      "$true", "$false", "$false", "$true",
-      "true", "false"
-    ])
+    keywords =
+      MapSet.new([
+        "~",
+        "|",
+        "&",
+        "=>",
+        "<=",
+        "<=>",
+        "<~>",
+        "=",
+        "!=",
+        "!",
+        "?",
+        "[",
+        "]",
+        ":",
+        ".",
+        "$true",
+        "$false",
+        "$false",
+        "$true",
+        "true",
+        "false"
+      ])
 
     tokens
-    |> Enum.reject(&(MapSet.member?(keywords, &1)))
+    |> Enum.reject(&MapSet.member?(keywords, &1))
     # Keep simple lowercase identifiers (propositional atoms)
-    |> Enum.filter(&(Regex.match?(~r/^[a-z][a-zA-Z0-9_]*$/, &1)))
+    |> Enum.filter(&Regex.match?(~r/^[a-z][a-zA-Z0-9_]*$/, &1))
     |> Enum.uniq()
   end
 
@@ -258,6 +318,7 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
   def tptp_formula_to_smt("(" <> rest, indent) do
     # Match balanced parentheses
     inner = strip_outer_parens("(" <> rest)
+
     if inner do
       tptp_formula_to_smt(inner, indent)
     else
@@ -280,8 +341,11 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
         convert_quantifier(formula, :exists, indent)
 
       # $true / $false
-      formula == "$true" -> "true"
-      formula == "$false" -> "false"
+      formula == "$true" ->
+        "true"
+
+      formula == "$false" ->
+        "false"
 
       # Negation: ~ F (handle leading whitespace and ~ without space)
       String.trim(formula) |> String.starts_with?("~") ->
@@ -293,7 +357,9 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
         case split_top_level(formula, "=") do
           [left, right] ->
             "(= #{tptp_formula_to_smt(left, indent)} #{tptp_formula_to_smt(right, indent)})"
-          _ -> "\"#{escape_formula(formula)}\""
+
+          _ ->
+            "\"#{escape_formula(formula)}\""
         end
 
       # Inequality: F1 != F2
@@ -301,7 +367,9 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
         case split_top_level(formula, "!=") do
           [left, right] ->
             "(not (= #{tptp_formula_to_smt(left, indent)} #{tptp_formula_to_smt(right, indent)}))"
-          _ -> "\"#{escape_formula(formula)}\""
+
+          _ ->
+            "\"#{escape_formula(formula)}\""
         end
 
       # Implication: F1 => F2
@@ -309,7 +377,9 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
         case split_top_level(formula, "=>") do
           [left, right] ->
             "(=> #{tptp_formula_to_smt(left, indent)} #{tptp_formula_to_smt(right, indent)})"
-          _ -> "\"#{escape_formula(formula)}\""
+
+          _ ->
+            "\"#{escape_formula(formula)}\""
         end
 
       # Equivalence: F1 <=> F2
@@ -317,7 +387,9 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
         case split_top_level(formula, "<=>") do
           [left, right] ->
             "(= #{tptp_formula_to_smt(left, indent)} #{tptp_formula_to_smt(right, indent)})"
-          _ -> "\"#{escape_formula(formula)}\""
+
+          _ ->
+            "\"#{escape_formula(formula)}\""
         end
 
       # Xor: F1 <~> F2
@@ -325,7 +397,9 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
         case split_top_level(formula, "<~>") do
           [left, right] ->
             "(xor #{tptp_formula_to_smt(left, indent)} #{tptp_formula_to_smt(right, indent)})"
-          _ -> "\"#{escape_formula(formula)}\""
+
+          _ ->
+            "\"#{escape_formula(formula)}\""
         end
 
       # Or: F1 | F2
@@ -341,7 +415,8 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
         end
 
       # Simple predicate or atom
-      true -> tptp_atom_to_smt(formula)
+      true ->
+        tptp_atom_to_smt(formula)
     end
   end
 
@@ -357,12 +432,15 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
 
   defp tptp_literal_to_smt(literal) do
     lit = String.trim(literal)
+
     if String.starts_with?(lit, "~") do
       inner = String.trim_leading(lit, "~") |> String.trim()
       # Check if the inner part has parentheses to strip
-      inner_clean = if String.starts_with?(inner, "(") and String.ends_with?(inner, ")"),
-                       do: String.slice(inner, 1..-2//-1) |> String.trim(),
-                       else: inner
+      inner_clean =
+        if String.starts_with?(inner, "(") and String.ends_with?(inner, ")"),
+          do: String.slice(inner, 1..-2//-1) |> String.trim(),
+          else: inner
+
       "(not #{tptp_prop_to_smt(inner_clean, 0)})"
     else
       tptp_prop_to_smt(lit, 0)
@@ -371,9 +449,14 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
 
   defp tptp_atom_to_smt(atom) do
     atom = String.trim(atom)
+
     cond do
-      atom == "$true" -> "true"
-      atom == "$false" -> "false"
+      atom == "$true" ->
+        "true"
+
+      atom == "$false" ->
+        "false"
+
       true ->
         # TPTP predicate: p(a,b) or just p
         # Simple: just pass through known atoms
@@ -402,7 +485,8 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
 
         "(#{q} (#{smt_vars}) #{tptp_formula_to_smt(body, indent + 1)})"
 
-      _ -> formula
+      _ ->
+        formula
     end
   end
 
@@ -411,6 +495,7 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
     |> String.split(",", trim: true)
     |> Enum.map(fn v ->
       v = String.trim(v)
+
       case String.split(v, ":", parts: 2) do
         [name, type] -> {String.trim(name), String.trim(type)}
         [name] -> {String.trim(name), ""}
@@ -422,6 +507,7 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
 
   defp strip_outer_parens("(" <> rest) do
     rest = String.trim_trailing(rest, ")")
+
     case count_parens("(" <> rest) do
       {1, _} -> String.trim(rest)
       _ -> nil

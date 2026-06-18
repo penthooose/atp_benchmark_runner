@@ -33,8 +33,8 @@ defmodule AtpBenchmarkRunner.Provers.Tableaux do
     Container.new(%{
       image_name: "simple_tableaux_solver",
       def_path: "priv/provers/tableaux/apptainer.def",
-      docker_image: "aise/simple-tableaux-solver:latest",
-      dockerfile_path: "priv/provers/tableaux/Dockerfile",
+      docker_image: "docker.io/aise/simple-tableaux-solver:latest",
+      dockerfile_path: "priv/provers/tableaux/Containerfile",
       homepage:
         "../item_12_Integrating_external_solvers_into_Elixir_and_Livebook/simple_tableaux_solver",
       source_url:

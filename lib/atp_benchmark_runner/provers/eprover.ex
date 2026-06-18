@@ -32,8 +32,8 @@ defmodule AtpBenchmarkRunner.Provers.EProver do
     Container.new(%{
       image_name: "eprover",
       def_path: "priv/provers/eprover/apptainer.def",
-      docker_image: "aise/atp-eprover:latest",
-      dockerfile_path: "priv/provers/eprover/Dockerfile",
+      docker_image: "docker.io/aise/atp-eprover:latest",
+      dockerfile_path: "priv/provers/eprover/Containerfile",
       homepage: "https://www.eprover.org/",
       source_url: "https://github.com/eprover/eprover",
       license: "GPL",

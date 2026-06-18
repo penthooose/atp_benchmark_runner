@@ -1,7 +1,7 @@
-# Leo-III Docker image (JVM-based, downloads latest release jar).
-#   docker build -t aise/atp-leo3:latest priv/provers/leo3/
-#   docker run --rm aise/atp-leo3:latest --timeout 30 /problems/problem.p
-FROM eclipse-temurin:21-jre-jammy AS builder
+# Leo-III container image (JVM-based, downloads latest release jar).
+#   docker build -t docker.io/aise/atp-leo3:latest priv/provers/leo3/
+#   docker run --rm docker.io/aise/atp-leo3:latest --timeout 30 /problems/problem.p
+FROM docker.io/eclipse-temurin:21-jre-jammy AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl jq unzip \
     && rm -rf /var/lib/apt/lists/*
@@ -20,7 +20,7 @@ RUN set -eux; \
     printf '#!/bin/sh\nexec java -jar %s "$@"\n' "$jar" > /usr/local/bin/leo3; \
     chmod +x /usr/local/bin/leo3
 
-FROM eclipse-temurin:21-jre-jammy
+FROM docker.io/eclipse-temurin:21-jre-jammy
 COPY --from=builder /usr/local/bin/leo3 /usr/local/bin/leo3
 COPY --from=builder /opt/leo3 /opt/leo3
 ENTRYPOINT ["leo3"]

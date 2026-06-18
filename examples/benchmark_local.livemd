@@ -4,25 +4,67 @@
 Mix.install([
   {:kino, "~> 0.19"},
   {:table, "0.1.2"},
-  {:atp_benchmark_runner, path: "item_14_ATP_Benchmark_Runner/atp_benchmark_runner", force: true}
+  # {:atp_benchmark_runner, path: Path.expand("..", __DIR__), force: true}
+  {:atp_benchmark_runner, github: "penthooose/atp_benchmark_runner", force: true}
+
 ])
 ```
 
-## 1. Detect available execution methods
+## 1. Configuration
+
+Benchmark artifacts (runs, results, reports), TPTP problem files, and temp files
+are stored in configurable directories. The resolution order is: explicit option
+→ env var → application env → default (under `~/.cache/atp_benchmark_runner`).
+
+```elixir
+IO.puts("Store directory:        #{AtpBenchmarkRunner.store_dir()}")
+IO.puts("TPTP directory:         #{AtpBenchmarkRunner.tptp_dir()}")
+IO.puts("SMT temp directory:     #{AtpBenchmarkRunner.Config.smt_tmp_dir()}")
+```
+
+Override any of these via environment variables (e.g., set
+`ATP_BENCHMARK_RUNNER_STORE_DIR` or `ATP_BENCHMARK_RUNNER_TPTP_DIR`), or pass
+options directly to the API functions.
+
+## 2. Download TPTP from tptp.org (optional)
+
+For a full benchmark, download the official TPTP library. The bundled examples
+are sufficient for smoke tests.
+
+```elixir
+# Download and extract the official TPTP archive (∼881MB, expands to ∼9.9GB).
+# This is a one-time operation; subsequent calls skip if already extracted.
+
+archive = AtpBenchmarkRunner.ensure_tptp_archive(
+  # root_dir: AtpBenchmarkRunner.tptp_dir(),  # uncomment to use configured dir
+  force: false
+)
+
+case archive do
+  {:ok, path} ->
+    IO.puts("TPTP archive ready at: #{path}")
+    IO.puts("Library root: #{AtpBenchmarkRunner.Config.tptp_dir() |> Path.join("TPTP-v9.2.1")}")
+  {:error, reason} ->
+    IO.puts("Download skipped or failed: #{inspect(reason)}")
+    IO.puts("Falling back to bundled examples — see step 4.")
+end
+```
+
+## 3. Detect available execution methods
 
 ```elixir
 avail = AtpBenchmarkRunner.LocalRunner.detect_available()
 ```
 
-## 2. Pre-build Docker images
+## 4. Pre-build container images
 
 Missing images are also automatically built / pulled when `auto_ensure_images: true` is
-set in step 6.
+set in step 7.
 
 ```elixir
 build_provers = [:eprover, :vampire, :cvc5, :zipperposition, :leo3]
 
-IO.puts("Pre-building Docker images for: #{inspect(build_provers)}")
+IO.puts("Pre-building container images for: #{inspect(build_provers)}")
 Enum.each(build_provers, fn name ->
   case AtpBenchmarkRunner.LocalRunner.docker_image_status(name) do
     :available -> IO.puts("  #{name} already available")
@@ -39,7 +81,7 @@ end)
 
 ---
 
-## 3. Install bundled TPTP test examples
+## 5. Install bundled TPTP test examples
 
 ```elixir
 tptp_root =
@@ -60,7 +102,7 @@ Enum.each(paths, &IO.puts("  - #{&1}"))
 
 ---
 
-## 4. Load problems and inspect metadata
+## 6. Load problems and inspect metadata
 
 ```elixir
 problems =
@@ -84,7 +126,7 @@ end)
 
 ---
 
-## 5. Select provers for local execution
+## 7. Select provers for local execution
 
 ```elixir
 selected_provers = [
@@ -106,7 +148,7 @@ end)
 
 ---
 
-## 6. Bootstrap & run benchmark
+## 8. Bootstrap & run benchmark
 
 `bootstrap/3` creates a plan (`Run` struct). `run_benchmark/1` executes it.
 
@@ -134,7 +176,7 @@ HPC mode stub
 
 ---
 
-## 7. Prover Results
+## 9. Prover Results
 
 ```elixir
 AtpBenchmarkRunner.results_table(results)
@@ -182,7 +224,34 @@ end
 
 ---
 
-## 9. Aggregated report
+## 10. Convert TPTP to SMT-LIB (for SMT-based provers like CVC5)
+
+Some provers (notably CVC5's static binary) do not natively parse TPTP and
+require SMT-LIB input. The runner handles this automatically during execution,
+but you can also convert files manually:
+
+```elixir
+# Pick one of the bundled examples as a test case
+example_p = AtpBenchmarkRunner.install_tptp_examples!() |> List.first()
+
+IO.puts("Converting: #{example_p}")
+
+# Convert to SMT-LIB string
+smt_content = AtpBenchmarkRunner.convert_tptp_to_smt!(example_p)
+IO.puts("SMT-LIB output (#{String.length(smt_content)} chars):\n")
+IO.puts(String.slice(smt_content, 0, 500) <> "\n...")
+
+# Or write to the configured temp directory and get the path back
+smt_path = AtpBenchmarkRunner.convert_tptp_to_smt_path!(example_p)
+IO.puts("\nWritten to: #{smt_path}")
+```
+
+The temp directory is configurable via `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` env var
+or `AtpBenchmarkRunner.Config.smt_tmp_dir/1`.
+
+---
+
+## 11. Aggregated report
 
 ```elixir
 report = AtpBenchmarkRunner.report(results)
@@ -206,7 +275,7 @@ AtpBenchmarkRunner.print_per_problem(report)
 
 ---
 
-## 10. Persist results to local store
+## 12. Persist results to local store
 
 ```elixir
 run = AtpBenchmarkRunner.new_run(
@@ -229,7 +298,7 @@ IO.puts("Report saved: #{report_path}")
 
 ---
 
-## 11. Compare with a previous run (longitudinal diff)
+## 13. Compare with a previous run (longitudinal diff)
 
 ```elixir
 prev_results_path = nil

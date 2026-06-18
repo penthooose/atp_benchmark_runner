@@ -1,7 +1,7 @@
-# Vampire Docker image (downloads latest GitHub release binary).
-#   docker build -t aise/atp-vampire:latest priv/provers/vampire/
-#   docker run --rm aise/atp-vampire:latest --mode casc --time_limit 30 /problems/problem.p
-FROM ubuntu:24.04 AS builder
+# Vampire container image (downloads latest GitHub release binary).
+#   docker build -t docker.io/aise/atp-vampire:latest priv/provers/vampire/
+#   docker run --rm docker.io/aise/atp-vampire:latest --mode casc --time_limit 30 /problems/problem.p
+FROM docker.io/ubuntu:24.04 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl unzip \
@@ -24,7 +24,7 @@ RUN set -eux; \
     cp "$found" /usr/local/bin/vampire; \
     chmod +x /usr/local/bin/vampire
 
-FROM ubuntu:24.04
+FROM docker.io/ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libomp5 \
     && rm -rf /var/lib/apt/lists/*

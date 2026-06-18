@@ -1,16 +1,24 @@
-# ATP prover Apptainer definitions
+# ATP prover image definitions
 
-This directory is owned by `atp_benchmark_runner` and contains one prover image
-definition per supported theorem prover:
+This directory is owned by `atp_benchmark_runner` and contains two image
+definition files per supported theorem prover:
 
-- `vampire/apptainer.def`
-- `eprover/apptainer.def`
-- `cvc5/apptainer.def`
-- `zipperposition/apptainer.def`
-- `leo3/apptainer.def`
-- `leo2/apptainer.def`
-- `tableaux/apptainer.def`
-- `lash/apptainer.def`
+- `Containerfile` — OCI-compatible image (Docker / Podman) for local benchmarks
+- `apptainer.def` — Apptainer/Singularity definition for HPC `.sif` builds
+
+The full canonical image names use `docker.io/` prefix (e.g.
+`docker.io/aise/atp-cvc5:latest`) for seamless Podman compatibility.
+
+**Supported provers:**
+
+- `vampire/`
+- `eprover/`
+- `cvc5/`
+- `zipperposition/`
+- `leo3/`
+- `leo2/`
+- `tableaux/`
+- `lash/`
 
 ## Integration with `hpc_connect`
 

@@ -11,6 +11,9 @@ defmodule AtpBenchmarkRunner.Config do
 
   @env_file_var "ATP_BENCHMARK_RUNNER_ENV_FILE"
   @tptp_dir_var "ATP_BENCHMARK_RUNNER_TPTP_DIR"
+  @store_dir_var "ATP_BENCHMARK_RUNNER_STORE_DIR"
+  @cache_dir_var "ATP_BENCHMARK_RUNNER_CACHE_DIR"
+  @smt_tmp_dir_var "ATP_BENCHMARK_RUNNER_SMT_TMP_DIR"
 
   @doc """
   Loads configuration values from the configured `.env` file.
@@ -41,6 +44,38 @@ defmodule AtpBenchmarkRunner.Config do
     |> first_present(get("TPTP_DIR", opts))
     |> first_present(Application.get_env(:atp_benchmark_runner, :tptp_dir))
     |> first_present(Path.join([Store.default_dir(), "tptp"]))
+    |> expand_path()
+  end
+
+  @doc """
+  Returns the local store/artifact directory for run manifests, results, and reports.
+
+  Configure via `ATP_BENCHMARK_RUNNER_STORE_DIR` env var, `ATP_BENCHMARK_RUNNER_CACHE_DIR`
+  (fallback), `:store_dir` application env, or the `:dir` option.
+  """
+  @spec store_dir(keyword()) :: binary()
+  def store_dir(opts \\ []) do
+    opts
+    |> option_value([:dir, :store_dir])
+    |> first_present(get(@store_dir_var, opts))
+    |> first_present(get(@cache_dir_var, opts))
+    |> first_present(Application.get_env(:atp_benchmark_runner, :store_dir))
+    |> first_present(Store.default_dir())
+    |> expand_path()
+  end
+
+  @doc """
+  Returns the temporary directory used for TPTP-to-SMT converted files.
+
+  Configure via `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` env var or the `:smt_tmp_dir` option.
+  Falls back to `System.tmp_dir!() |> Path.join("atp_smt_converted")`.
+  """
+  @spec smt_tmp_dir(keyword()) :: binary()
+  def smt_tmp_dir(opts \\ []) do
+    opts
+    |> option_value([:smt_tmp_dir])
+    |> first_present(get(@smt_tmp_dir_var, opts))
+    |> first_present(Path.join(System.tmp_dir!(), "atp_smt_converted"))
     |> expand_path()
   end
 

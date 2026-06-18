@@ -1,9 +1,9 @@
-# Lash Docker image (experimental, OCaml-based).
-#   docker build -t aise/atp-lash:latest priv/provers/lash/
-#   docker run --rm aise/atp-lash:latest /problems/problem.p
+# Lash container image (experimental, OCaml-based).
+#   docker build -t docker.io/aise/atp-lash:latest priv/provers/lash/
+#   docker run --rm docker.io/aise/atp-lash:latest /problems/problem.p
 ARG LASH_URL=http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tar.gz
 
-FROM ubuntu:24.04 AS builder
+FROM docker.io/ubuntu:24.04 AS builder
 ARG LASH_URL
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl build-essential make ocaml \
@@ -30,6 +30,6 @@ RUN candidate="$(find /opt/lash -maxdepth 3 -type f \( -name 'lash' -o -name 'la
     echo "Lash source not available, using stub"; \
     fi
 
-FROM ubuntu:24.04
+FROM docker.io/ubuntu:24.04
 COPY --from=builder /usr/local/bin/lash /usr/local/bin/lash
 ENTRYPOINT ["lash"]

@@ -1,7 +1,7 @@
-# LEO-II Docker image (legacy OCaml build).
-#   docker build -t aise/atp-leo2:latest priv/provers/leo2/
-#   docker run --rm aise/atp-leo2:latest --timeout 30 /problems/problem.p
-FROM ubuntu:20.04 AS builder
+# LEO-II container image (legacy OCaml build).
+#   docker build -t docker.io/aise/atp-leo2:latest priv/provers/leo2/
+#   docker run --rm docker.io/aise/atp-leo2:latest --timeout 30 /problems/problem.p
+FROM docker.io/ubuntu:20.04 AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl build-essential make ocaml ocaml-findlib camlp4 camlp5 \
     && rm -rf /var/lib/apt/lists/*
@@ -24,6 +24,6 @@ RUN printf '#!/bin/sh\necho "LEO-II binary not available (build fails on modern 
     echo "LEO-II source build failed, using stub binary"; \
     fi
 
-FROM ubuntu:20.04
+FROM docker.io/ubuntu:20.04
 COPY --from=builder /usr/local/bin/leo /usr/local/bin/leo
 ENTRYPOINT ["leo"]

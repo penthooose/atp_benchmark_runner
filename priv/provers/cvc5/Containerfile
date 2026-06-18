@@ -1,7 +1,7 @@
-# CVC5 Docker image (downloads latest GitHub release binary).
-#   docker build -t aise/atp-cvc5:latest priv/provers/cvc5/
-#   docker run --rm aise/atp-cvc5:latest --lang=tptp --tlimit=30000 /problems/problem.p
-FROM ubuntu:24.04 AS builder
+# CVC5 container image (downloads latest GitHub release binary).
+#   docker build -t docker.io/aise/atp-cvc5:latest priv/provers/cvc5/
+#   docker run --rm docker.io/aise/atp-cvc5:latest --lang=tptp --tlimit=30000 /problems/problem.p
+FROM docker.io/ubuntu:24.04 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl unzip xz-utils \
@@ -24,6 +24,6 @@ RUN set -eux; \
     [ -n "$found" ] || { echo "cvc5 binary not found in archive" >&2; exit 1; }; \
     install -m 0755 "$found" /usr/local/bin/cvc5
 
-FROM ubuntu:24.04
+FROM docker.io/ubuntu:24.04
 COPY --from=builder /usr/local/bin/cvc5 /usr/local/bin/cvc5
 ENTRYPOINT ["cvc5"]

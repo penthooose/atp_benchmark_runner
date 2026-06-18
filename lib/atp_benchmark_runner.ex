@@ -9,6 +9,7 @@ defmodule AtpBenchmarkRunner do
 
   alias AtpBenchmarkRunner.{
     Compare,
+    Config,
     Notification,
     Problem,
     Prover,
@@ -29,6 +30,56 @@ defmodule AtpBenchmarkRunner do
     HPC.Submitter,
     HPC.TPTPSync
   }
+
+  @doc """
+  Returns the configured store/artifact directory for run manifests, results, and reports.
+
+  Configure via `ATP_BENCHMARK_RUNNER_STORE_DIR` env var (preferred),
+  `ATP_BENCHMARK_RUNNER_CACHE_DIR` env var (fallback), or the `:dir` option.
+
+  See `AtpBenchmarkRunner.Config.store_dir/1` for full resolution order.
+  """
+  @spec store_dir(keyword()) :: binary()
+  def store_dir(opts \\ []), do: Config.store_dir(opts)
+
+  @doc """
+  Returns the configured TPTP root directory for local problem files.
+
+  Configure via `ATP_BENCHMARK_RUNNER_TPTP_DIR` env var, `TPTP_DIR` env var,
+  `:tptp_dir` application env, or the `:tptp_dir` / `:root_dir` option.
+
+  See `AtpBenchmarkRunner.Config.tptp_dir/1` for full resolution order.
+  """
+  @spec tptp_dir(keyword()) :: binary()
+  def tptp_dir(opts \\ []), do: Config.tptp_dir(opts)
+
+  @doc """
+  Converts a TPTP problem file to SMT-LIB format string.
+
+  Useful when running provers (like CVC5) that don't natively parse TPTP.
+
+  ## Examples
+
+      smt = AtpBenchmarkRunner.convert_tptp_to_smt!("path/to/problem.p")
+      File.write!("problem.smt2", smt)
+
+  See `AtpBenchmarkRunner.TPTPToSMT` for full documentation.
+  """
+  @spec convert_tptp_to_smt!(binary()) :: binary()
+  def convert_tptp_to_smt!(path) when is_binary(path),
+    do: AtpBenchmarkRunner.TPTPToSMT.convert_file!(path)
+
+  @doc """
+  Converts a TPTP problem file to SMT-LIB and writes it to the configured temp directory.
+
+  Returns the path to the written `.smt2` file.
+
+  The temp directory is resolved via `Config.smt_tmp_dir/1` and can be
+  configured with `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` env var.
+  """
+  @spec convert_tptp_to_smt_path!(binary(), keyword()) :: binary()
+  def convert_tptp_to_smt_path!(path, opts \\ []) when is_binary(path),
+    do: AtpBenchmarkRunner.TPTPToSMT.convert_file_to_path!(path, opts)
 
   @doc """
   Creates a benchmark run manifest.

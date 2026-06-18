@@ -33,8 +33,8 @@ defmodule AtpBenchmarkRunner.Provers.Leo2 do
     Container.new(%{
       image_name: "leo2",
       def_path: "priv/provers/leo2/apptainer.def",
-      docker_image: "aise/atp-leo2:latest",
-      dockerfile_path: "priv/provers/leo2/Dockerfile",
+      docker_image: "docker.io/aise/atp-leo2:latest",
+      dockerfile_path: "priv/provers/leo2/Containerfile",
       homepage: "http://page.mi.fu-berlin.de/cbenzmueller/leo/",
       source_url: "http://page.mi.fu-berlin.de/cbenzmueller/leo/download.html",
       license: "BSD",
