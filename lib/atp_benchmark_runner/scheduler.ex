@@ -1,20 +1,11 @@
 defmodule AtpBenchmarkRunner.Scheduler do
   @moduledoc """
-  Optional Oban integration boundary for nightly benchmark runs.
+  Optional Oban integration for nightly runs. No compile-time dep on Oban.
 
-  This module has no hard compile-time dependency on Oban. Add and configure
-  Oban/Postgres in the host application, then use `enqueue_nightly/2`.
+  Side effects are dispatched through a host-provided MFA descriptor:
 
-  Because Oban jobs are JSON-serialized, real side effects are dispatched through
-  a host-provided MFA descriptor, for example:
-
-      %{
-        "runner_mfa" => %{
-          "module" => "MyApp.AtpNightly",
-          "function" => "run",
-          "args" => [%{"cluster" => "fritz"}]
-        }
-      }
+      %{"runner_mfa" => %{"module" => "MyApp.AtpNightly", "function" => "run",
+        "args" => [%{"cluster" => "fritz"}]}}
   """
 
   @doc """

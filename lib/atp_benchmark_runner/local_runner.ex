@@ -1,23 +1,11 @@
 defmodule AtpBenchmarkRunner.LocalRunner do
   @moduledoc """
-  Runs ATP provers locally (not on HPC/SLURM) and collects results.
+  Runs ATP provers locally via `System.cmd/3`, no HPC/SLURM needed.
 
-  This module provides a sequential execution path for local benchmarks, useful
-  for smoke-testing, debugging, and running small problem sets without HPC
-  cluster access. Each prover is invoked as a child process via `System.cmd/3`.
-
-  ## Detection
-
-  Use `detect_available/0` to see which provers are actually runnable on this machine:
-
-      AtpBenchmarkRunner.LocalRunner.detect_available()
-      # => %{tableaux: :escript, docker: false, on_path: []}
-
-  ## Basic usage
+  Good for smoke-testing and debugging small problem sets.
 
       provers = [:tableaux]
       problems = AtpBenchmarkRunner.install_tptp_examples!()
-
       results = AtpBenchmarkRunner.LocalRunner.run_benchmark(provers, problems,
         timeout_seconds: 30
       )
@@ -26,14 +14,9 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   alias AtpBenchmarkRunner.{Problem, Prover, Result}
 
   @doc """
-  Detects which prover execution methods are available on this machine.
+  Returns a map of available execution methods on this machine.
 
-  Returns a map with:
-  - `:tableaux` — `:escript`, `:mix`, or `:none`
-  - `:docker` — `boolean()` whether Docker CLI responds
-  - `:escript` — `boolean()` whether `escript` command is available
-  - `:on_path` — list of prover atoms whose native binaries are on PATH
-  - `:docker_images` — map of prover atom → `:available` | `:needs_pull` | `:needs_build` | `:unavailable`
+  Keys: `:tableaux`, `:docker`, `:escript`, `:on_path`, `:docker_images`.
   """
   @spec detect_available() :: map()
   def detect_available do

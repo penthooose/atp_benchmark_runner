@@ -12,11 +12,9 @@ defmodule AtpBenchmarkRunner.Workflow do
   alias AtpBenchmarkRunner.HPC.{Results, Submitter, TPTPSync}
 
   @doc """
-  Collects remote results, stores artifacts, writes local DB records, and builds a report.
+  Collects remote results, stores artifacts, writes local DB, builds a report.
 
-  Options are passed through to result collection and storage. The local DB is
-  enabled by default because this workflow is intended for reproducible review;
-  pass `db?: false` to only write JSON artifacts.
+  Pass `db?: false` to skip the local DB and only write JSON artifacts.
   """
   @spec collect_store_report!(HpcConnect.Session.t(), Run.t(), keyword()) :: map()
   def collect_store_report!(%HpcConnect.Session{} = session, %Run{} = run, opts \\ []) do
@@ -58,21 +56,13 @@ defmodule AtpBenchmarkRunner.Workflow do
   end
 
   @doc """
-  Full non-Oban nightly orchestration for one HPC session.
+  One-shot nightly orchestration without Oban.
 
-  This is a single-call pipeline that:
+  Loads problems, syncs to cluster, builds a Run manifest, submits (or dry-runs),
+  and persists job IDs. Does **not** poll or collect results — call
+  `collect_store_report!/3` separately after jobs finish.
 
-    1. Loads TPTP problems locally (and applies the `:problem_filter` from `opts`).
-    2. Syncs the local TPTP files to the cluster vault.
-    3. Builds a `Run` manifest from `:provers`, `:cluster`, `:partition`, etc.
-    4. Submits the run (or returns a dry-run plan when `dry_run: true`).
-    5. Persists the run manifest and the submitted job IDs through `Store`.
-
-  The function deliberately does **not** poll or collect results: that step
-  requires the cluster to actually finish the jobs. Callers can run a separate
-  `collect_store_report!/3` later in the morning.
-
-  Returns a map with `:run`, `:submitted_jobs`, `:dry_run?`, and `:plan` keys.
+  Returns `%{run, submitted_jobs, dry_run?, plan}`.
   """
   @spec orchestrate_nightly(HpcConnect.Session.t(), keyword()) :: map()
   def orchestrate_nightly(%HpcConnect.Session{} = session, opts \\ []) do

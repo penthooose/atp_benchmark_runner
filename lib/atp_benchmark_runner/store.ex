@@ -199,7 +199,7 @@ defmodule AtpBenchmarkRunner.Store do
   defp default_config_snapshot do
     %{
       store_dir: default_dir(),
-      tptp_dir: System.get_env("ATP_BENCHMARK_RUNNER_TPTP_DIR"),
+      tptp_dir: System.get_env("TPTP_ROOT"),
       hpc_work_dir: System.get_env("HPC_CONNECT_WORK_DIR"),
       hpc_vault_dir: System.get_env("HPC_CONNECT_VAULT_DIR")
     }

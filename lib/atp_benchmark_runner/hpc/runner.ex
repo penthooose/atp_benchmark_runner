@@ -1,22 +1,12 @@
 defmodule AtpBenchmarkRunner.HPC.Runner do
   @moduledoc """
-  HPC execution runner for ATP benchmarking.
+  Runs benchmarks on HPC clusters via `hpc_connect`.
 
-  This module provides parallel execution on HPC clusters via `hpc_connect`.
-  It supports different execution modes:
-
-    * `:single_node` — All provers run on a single compute node
-    * `:multi_node` — Each prover runs on a separate compute node
-
-  ## Basic usage
+  Modes: `:single_node` (default, all provers on one node) or `:multi_node`.
 
       session = HpcConnect.Session.local()
-      provers = [:vampire, :eprover, :cvc5]
-      problems = AtpBenchmarkRunner.load_tptp_problems(root_dir: "/path/to/tptp")
-
-      results = AtpBenchmarkRunner.HPC.Runner.bootstrap(session, provers, problems,
-        mode: :hpc,
-        hpc_mode: :single_node
+      AtpBenchmarkRunner.HPC.Runner.bootstrap(session, provers, problems,
+        mode: :hpc, hpc_mode: :single_node
       )
   """
 

@@ -32,39 +32,33 @@ defmodule AtpBenchmarkRunner do
   }
 
   @doc """
-  Returns the configured store/artifact directory for run manifests, results, and reports.
+  Store dir for run manifests, results and reports.
 
-  Configure via `ATP_BENCHMARK_RUNNER_STORE_DIR` env var (preferred),
-  `ATP_BENCHMARK_RUNNER_CACHE_DIR` env var (fallback), or the `:dir` option.
-
-  See `AtpBenchmarkRunner.Config.store_dir/1` for full resolution order.
+  Configurable via `ATP_BENCHMARK_RUNNER_STORE_DIR` env var or `:dir` option.
+  See `AtpBenchmarkRunner.Config.store_dir/1` for resolution order.
   """
   @spec store_dir(keyword()) :: binary()
   def store_dir(opts \\ []), do: Config.store_dir(opts)
 
   @doc """
-  Returns the configured TPTP root directory for local problem files.
+  TPTP root for local problem files.
 
-  Configure via `ATP_BENCHMARK_RUNNER_TPTP_DIR` env var, `TPTP_DIR` env var,
-  `:tptp_dir` application env, or the `:tptp_dir` / `:root_dir` option.
-
-  See `AtpBenchmarkRunner.Config.tptp_dir/1` for full resolution order.
+  Configure via `TPTP_ROOT` env var, or `:tptp_dir` / `:root_dir` option.
+  See `AtpBenchmarkRunner.Config.tptp_dir/1`.
   """
   @spec tptp_dir(keyword()) :: binary()
   def tptp_dir(opts \\ []), do: Config.tptp_dir(opts)
 
   @doc """
-  One-call local Livebook setup: redirects all storage into `./tmp/` next to
-  the notebook, keeping the workspace self-contained and easy to clean up.
+  Redirects all storage into `./tmp/`, keeping the workspace self-contained.
 
-  Call this as the first cell in your Livebook, right after Mix.install:
+  Call right after Mix.install in Livebook:
 
       AtpBenchmarkRunner.setup_local(tmp_root: Path.expand("./tmp", __DIR__))
 
-  Sets `ATP_BENCHMARK_RUNNER_STORE_DIR`, `ATP_BENCHMARK_RUNNER_TPTP_DIR`, and
-  `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` to subdirectories of `tmp_root`. Without
-  this call (or the equivalent env vars), everything falls back to
-  `~/.cache/atp_benchmark_runner`.
+  Sets `ATP_BENCHMARK_RUNNER_STORE_DIR`, `TPTP_ROOT`, and
+  `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` under `tmp_root`. Without this,
+  everything falls back to `~/.cache/atp_benchmark_runner`.
   """
   @spec setup_local(keyword()) :: :ok
   def setup_local(opts \\ []) do
@@ -74,22 +68,17 @@ defmodule AtpBenchmarkRunner do
       |> Config.expand_path()
 
     System.put_env("ATP_BENCHMARK_RUNNER_STORE_DIR", Path.join(tmp_root, "store"))
-    System.put_env("ATP_BENCHMARK_RUNNER_TPTP_DIR", Path.join(tmp_root, "tptp"))
+    System.put_env("TPTP_ROOT", Path.join(tmp_root, "tptp"))
     System.put_env("ATP_BENCHMARK_RUNNER_SMT_TMP_DIR", Path.join(tmp_root, "smt_converted"))
     :ok
   end
 
   @doc """
-  Converts a TPTP problem file to SMT-LIB format string.
+  Converts a TPTP file to SMT-LIB string.
 
-  Useful when running provers (like CVC5) that don't natively parse TPTP.
-
-  ## Examples
+  Needed for provers like CVC5 that don't natively parse TPTP.
 
       smt = AtpBenchmarkRunner.convert_tptp_to_smt!("path/to/problem.p")
-      File.write!("problem.smt2", smt)
-
-  See `AtpBenchmarkRunner.TPTPToSMT` for full documentation.
   """
   @spec convert_tptp_to_smt!(binary()) :: binary()
   def convert_tptp_to_smt!(path) when is_binary(path),
@@ -184,22 +173,12 @@ defmodule AtpBenchmarkRunner do
   def load_tptp_problems(opts \\ []), do: TPTP.load_problem_set(opts)
 
   @doc """
-  Selects benchmark problems flexibly.
+  Select benchmark problems by name or filter.
 
-  Accepts a keyword list (options below) or a plain list of TPTP names:
+      AtpBenchmarkRunner.select_problems(["GRP001-0.p", "ANA002-4.p"])
+      AtpBenchmarkRunner.select_problems(rating_max: 0.1, limit: 15)
 
-      # Shortest form — just the names
-      problems = AtpBenchmarkRunner.select_problems(["GRP001-0.p", "ANA002-4.p"])
-
-      # Explicit keyword
-      problems = AtpBenchmarkRunner.select_problems(
-        names: ["GRP001-0.p", "ANA002-4.p", "axioms/AGT001+2.ax"]
-      )
-
-      # Rating-filtered from archive (falls back to bundled examples)
-      problems = AtpBenchmarkRunner.select_problems(rating_max: 0.1, limit: 15)
-
-  See AtpBenchmarkRunner.TPTP.select/1 for all options.
+  See `AtpBenchmarkRunner.TPTP.select/1` for all options.
   """
   @spec select_problems(keyword() | [binary()]) :: [AtpBenchmarkRunner.Problem.t()]
   def select_problems(opts \\ []), do: TPTP.select(opts)
@@ -304,40 +283,20 @@ defmodule AtpBenchmarkRunner do
   def report(results, run \\ nil, opts \\ []), do: Report.summarize(results, run, opts)
 
   @doc """
-  Creates a benchmark plan (Run struct) from provers, problems, and execution options.
-
-  This is the main entry point for configuring a benchmark without running it.
-  Use `run_benchmark/1` to execute the plan.
+  Creates a benchmark plan without running it. Use `run_benchmark/1` to execute.
 
   ## Modes
 
-  ### :local (default)
-  Runs provers sequentially, with each prover running all problems before
-  switching to the next prover. This reduces container loading times since
-  each container is started once and reused for all problems.
-
-      plan = AtpBenchmarkRunner.bootstrap(provers, problems, mode: :local)
-      results = AtpBenchmarkRunner.run_benchmark(plan)
-
-  ### :hpc
-  Runs provers in parallel on HPC resources, with one prover per compute node.
-  Requires `hpc_connect` session and cluster configuration.
-
-      plan = AtpBenchmarkRunner.bootstrap(session, provers, problems, mode: :hpc)
-      results = AtpBenchmarkRunner.run_benchmark(plan)
-
-  ## HPC Modes (when mode: :hpc)
-
-    * `:single_node` - All provers run on a single compute node (default)
-    * `:multi_node` - Each prover runs on a separate compute node
+    * `:local` (default) — runs provers sequentially, each prover runs all problems
+    * `:hpc` — runs provers in parallel on HPC via `hpc_connect`
+      * `:single_node` (default) — all provers on one compute node
+      * `:multi_node` — each prover on its own node
 
   ## Options
 
-    * `:mode` — Execution mode: `:local` or `:hpc` (default: `:local`)
-    * `:hpc_mode` — HPC execution mode: `:single_node` or `:multi_node` (default: `:single_node`)
-    * `:timeout_seconds` — Per-problem wall time limit (default: 60)
-    * `:include_raw_output` — Include full stdout in results (default: false)
-    * `:auto_ensure_images` — Automatically pull/build missing Docker images (default: false)
+    * `:timeout_seconds` — per-problem limit (default: 60)
+    * `:include_raw_output` — include full stdout (default: false)
+    * `:auto_ensure_images` — pull/build missing images (default: false)
   """
   @spec bootstrap(
           HpcConnect.Session.t() | [Prover.t() | atom() | binary()],

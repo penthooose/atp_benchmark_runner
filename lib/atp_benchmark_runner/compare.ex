@@ -2,20 +2,10 @@ defmodule AtpBenchmarkRunner.Compare do
   @moduledoc """
   Longitudinal comparison between two benchmark runs.
 
-  The comparison focuses on per-problem status changes so the morning review can
-  highlight:
+  Returns `:new_solves`, `:regressions`, `:only_left`, `:only_right`,
+  `:status_changes`, and `:per_prover_solve_deltas`.
 
-    * `:new_solves` — problems where the right (newer) run gained a `Theorem`/
-      `Unsatisfiable`/… status for a prover that the left (baseline) run lost.
-    * `:regressions` — the opposite: a prover that was solving the problem in
-      the baseline run but no longer does.
-    * `:only_left` / `:only_right` — status records that exist on only one side.
-    * `:status_changes` — non-solve status changes such as `Theorem` → `Timeout`.
-    * `:per_prover_solve_deltas` — solve counts before/after for each prover.
-
-  Inputs may be raw results (`[AtpBenchmarkRunner.Result.t()]`) or already-
-  normalized local-DB records. The function is pure; Livebook and the CLI both
-  rely on the same shape.
+  Accepts raw results or local-DB records.
   """
 
   alias AtpBenchmarkRunner.Result

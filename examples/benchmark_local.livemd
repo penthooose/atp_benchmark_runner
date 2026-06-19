@@ -4,44 +4,41 @@
 Mix.install([
   {:kino, "~> 0.19"},
   {:table, "0.1.2"},
-  # {:atp_benchmark_runner, path: Path.expand("..", __DIR__), force: true}
+  # {:atp_benchmark_runner, path: "item_14_ATP_Benchmark_Runner/atp_benchmark_runner", force: true}
   {:atp_benchmark_runner, github: "penthooose/atp_benchmark_runner", force: true}
 
 ])
 ```
 
-## 1. Configuration — local storage
+## 1. Configuration
 
-All benchmark data lives in `./tmp/` by default. Override via environment
-variables (`ATP_BENCHMARK_RUNNER_STORE_DIR`, `ATP_BENCHMARK_RUNNER_TPTP_DIR`,
-`ATP_BENCHMARK_RUNNER_SMT_TMP_DIR`) or pass `:dir`/`:root_dir` options to
-individual API functions.
+All benchmark data lives in `./tmp/` by default
 
 ```elixir
-IO.puts("Store directory:   #{AtpBenchmarkRunner.store_dir()}")
-IO.puts("TPTP directory:    #{AtpBenchmarkRunner.tptp_dir()}")
-IO.puts("SMT temp dir:      #{AtpBenchmarkRunner.Config.smt_tmp_dir()}")
+IO.puts("Store directory:      #{AtpBenchmarkRunner.store_dir()}")
+IO.puts("TPTP directory:       #{AtpBenchmarkRunner.tptp_dir()}")
+IO.puts("User examples dir:    #{AtpBenchmarkRunner.Config.user_examples_dir()}")
+IO.puts("SMT temp dir:         #{AtpBenchmarkRunner.Config.smt_tmp_dir()}")
 ```
 
 ## 2. Point to your TPTP library
 
-Set `ATP_BENCHMARK_RUNNER_TPTP_DIR` or adjust the path below to your
+Set `TPTP_ROOT` or adjust the path below to your
 downloaded TPTP archive.
 
 ```elixir
-# Already downloaded? Uncomment and set the path to skip the download step:
-# System.put_env("ATP_BENCHMARK_RUNNER_TPTP_DIR", "C:/Users/Paul/.../tmp/tptp")
+# to set path to download dir:
+# System.put_env("TPTP_ROOT", "./tmp/tptp")
 
 tptp_lib = AtpBenchmarkRunner.TPTP.library_root(root_dir: AtpBenchmarkRunner.tptp_dir())
 IO.puts("TPTP library root: #{tptp_lib}")
 IO.puts("Problems directory exists: #{File.dir?(Path.join(tptp_lib, "Problems"))}")
 ```
 
-## 3. Download TPTP from tptp.org (optional — skip if already downloaded)
+## 3. Download TPTP from tptp.org (optional)
 
 ```elixir
 # Download and extract the official TPTP archive (∼881MB, expands to ∼9.9GB).
-# Skip this if you already have it (see step 2).
 
 archive = AtpBenchmarkRunner.ensure_tptp_archive(
   root_dir: AtpBenchmarkRunner.tptp_dir(),
@@ -90,26 +87,21 @@ end)
 
 ## 6. Select benchmark problems
 
-Pass a plain list of TPTP filenames (no keyword wrapper needed). Falls back
-to bundled `priv/tptp_examples` when no full archive is available.
-
-> **TPTP naming:** `ANA002-4.p` — the `-4` is a _version number_, not a
-> difficulty rating. Actual difficulty is the `Rating:` field (0.00–1.00) in
-> each problem's TPTP header comments.
-
 ```elixir
 problems = AtpBenchmarkRunner.select_problems([
-  "ALG001+0.p",
+  # Either use bare filenames
+  # "USR001+0.ax", # you can also input own examles from ./tmp/tptp/user_examples
   "GRP001-0.p",
   "GRP002+0.p",
-  "GRP003+0.p",
-  "GRP004+0.p",
   "LAT001+0.p",
   "PUZ001+0.p",
-  "REL001+0.p",
-  "SET001^0.p",
   "SYN000+0.p",
-  "THF001+0.p"
+  "SMT001+0.p",
+
+  # Or relative directory paths
+  "Problems/REL/REL001+0.p",
+  "Problems/GRP/GRP003+0.p",
+  "Problems/GRP/GRP004+0.p",
 ])
 
 IO.puts("Loaded #{length(problems)} problem(s):\n")
@@ -156,7 +148,7 @@ end)
 
 ## 8. Bootstrap & run benchmark
 
-`bootstrap/3` creates a plan (`Run` struct). `run_benchmark/1` executes it.
+`bootstrap/3` creates a plan (`Run` struct). `run_benchmark/1` executes it. Control the timeout by `timeout_seconds` for individual solvers.
 
 ```elixir
 plan = AtpBenchmarkRunner.bootstrap(selected_provers, problems,
@@ -232,23 +224,23 @@ end
 
 ## 10. Convert TPTP to SMT-LIB (for SMT-based provers like CVC5)
 
-Some provers (notably CVC5's static binary) do not natively parse TPTP and
-require SMT-LIB input. The runner handles this automatically during execution,
+Some provers, such as the CVC5's static binary, do not natively parse TPTP and
+require SMT-LIB input. The runner handles this parsing automatically during execution,
 but you can also convert files manually:
 
 ```elixir
-# Pick one of the bundled examples as a test case
-example_p = AtpBenchmarkRunner.install_tptp_examples!() |> List.first()
+# Pick an example
+[example_p | _] = AtpBenchmarkRunner.TPTP.bundled_examples()
 
-IO.puts("Converting: #{example_p}")
+IO.puts("Converting: #{example_p.name} (#{example_p.path})")
 
 # Convert to SMT-LIB string
-smt_content = AtpBenchmarkRunner.convert_tptp_to_smt!(example_p)
+smt_content = AtpBenchmarkRunner.convert_tptp_to_smt!(example_p.path)
 IO.puts("SMT-LIB output (#{String.length(smt_content)} chars):\n")
 IO.puts(String.slice(smt_content, 0, 500) <> "\n...")
 
 # Or write to the configured temp directory and get the path back
-smt_path = AtpBenchmarkRunner.convert_tptp_to_smt_path!(example_p)
+smt_path = AtpBenchmarkRunner.convert_tptp_to_smt_path!(example_p.path)
 IO.puts("\nWritten to: #{smt_path}")
 ```
 

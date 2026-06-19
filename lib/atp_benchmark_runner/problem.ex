@@ -1,11 +1,8 @@
 defmodule AtpBenchmarkRunner.Problem do
   @moduledoc """
-  Structured representation of a TPTP benchmark problem.
+  A TPTP benchmark problem. Points to a local or remote path, or a name.
 
-  Problems can point at an already-synced remote path, a local path that will be
-  synced by a later workflow step, or a canonical TPTP problem name. The runner
-  keeps the struct intentionally small because large metadata belongs in the
-  result store, not in SLURM scripts.
+  Kept intentionally small — bulk metadata lives in the result store.
   """
 
   @enforce_keys [:id, :name]
@@ -71,7 +68,7 @@ defmodule AtpBenchmarkRunner.Problem do
   end
 
   @doc """
-  Reads a TPTP problem file and extracts common header metadata.
+  Reads a TPTP file and extracts header metadata (rating, status, etc).
   """
   @spec from_tptp_file(binary(), keyword()) :: t()
   def from_tptp_file(path, attrs \\ []) when is_binary(path) do
@@ -84,7 +81,7 @@ defmodule AtpBenchmarkRunner.Problem do
   end
 
   @doc """
-  Parses common `% Key : Value` metadata lines from TPTP files.
+  Parses `% Key : Value` metadata lines from TPTP headers.
   """
   @spec parse_tptp_header(binary()) :: map()
   def parse_tptp_header(content) when is_binary(content) do

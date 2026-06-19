@@ -1,11 +1,8 @@
 defmodule AtpBenchmarkRunner.Prover.Container do
   @moduledoc """
-  Containerization metadata for an ATP prover.
+  Container metadata for ATP provers.
 
-  The benchmark runner treats theorem provers as command-line tools. Elixir is
-  used for orchestration, while reproducibility on HPC is achieved with
-  Apptainer/Singularity images. Kubernetes can reuse the same OCI image metadata
-  later, but FAU HPC execution should prefer `.sif` images.
+  HPC runs use Apptainer `.sif` images. Same OCI metadata can be reused for K8s.
   """
 
   @enforce_keys [:image_name, :def_path]

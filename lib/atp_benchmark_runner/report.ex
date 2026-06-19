@@ -220,13 +220,7 @@ defmodule AtpBenchmarkRunner.Report do
   defp timestamp, do: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
   @doc """
-  Prints the interesting findings section (easy failed, hard solved, only ours, only others)
-  directly to stdout. Takes a report map as returned by `summarize/3`.
-
-  ## Examples
-
-      report = AtpBenchmarkRunner.report(results)
-      AtpBenchmarkRunner.Report.print_interesting(report)
+  Prints interesting findings (easy failed, hard solved, only ours, only others).
   """
   @spec print_interesting(map()) :: :ok
   def print_interesting(report) do
@@ -271,13 +265,7 @@ defmodule AtpBenchmarkRunner.Report do
   end
 
   @doc """
-  Prints the per-prover breakdown table directly to stdout.
-  Takes a report map as returned by `summarize/3`.
-
-  ## Examples
-
-      report = AtpBenchmarkRunner.report(results)
-      AtpBenchmarkRunner.Report.print_per_prover(report)
+  Prints per-prover breakdown table to stdout.
   """
   @spec print_per_prover(map()) :: :ok
   def print_per_prover(report) do
@@ -294,13 +282,7 @@ defmodule AtpBenchmarkRunner.Report do
   end
 
   @doc """
-  Prints the per-problem comparison table directly to stdout.
-  Takes a report map as returned by `summarize/3`.
-
-  ## Examples
-
-      report = AtpBenchmarkRunner.report(results)
-      AtpBenchmarkRunner.Report.print_per_problem(report)
+  Prints per-problem comparison table to stdout.
   """
   @spec print_per_problem(map()) :: :ok
   def print_per_problem(report) do

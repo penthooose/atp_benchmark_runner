@@ -6,12 +6,10 @@ defmodule AtpBenchmarkRunner.GUI.Report do
   alias AtpBenchmarkRunner.{Compare, Report, Run}
 
   @doc """
-  Renders a report as Kino markdown/tables when available.
+  Renders a report as Kino markdown/tables.
 
-  Options:
-    * `:artifact_paths` — map with `:run`, `:results`, `:report` keys; the
-      panel will render an additional markdown block listing the on-disk
-      source artifacts. When omitted, the artifact block is hidden.
+  Pass `:artifact_paths` (map with `:run`, `:results`, `:report` keys)
+  to show on-disk source artifact paths.
   """
   @spec panel([AtpBenchmarkRunner.Result.t() | map()] | map(), Run.t() | nil, keyword()) ::
           map() | term()

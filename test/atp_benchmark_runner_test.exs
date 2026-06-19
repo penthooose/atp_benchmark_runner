@@ -28,7 +28,7 @@ defmodule AtpBenchmarkRunnerTest do
     env_file = Path.join(tmp, ".env")
     tptp_dir = Path.join(tmp, "tptp")
     File.mkdir_p!(tmp)
-    File.write!(env_file, "ATP_BENCHMARK_RUNNER_TPTP_DIR=#{tptp_dir}\n")
+    File.write!(env_file, "TPTP_ROOT=#{tptp_dir}\n")
 
     assert Config.tptp_dir(env_file: env_file) == Path.expand(tptp_dir)
   end

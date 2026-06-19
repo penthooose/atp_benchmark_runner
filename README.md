@@ -6,9 +6,10 @@ delegated to the local `hpc_connect` library from item #15.
 
 ## Current scope
 
-- Define benchmark runs over TPTP problem paths or names
+- Define benchmark runs from TPTP problem names or paths
+- Pick problems by bare filename (`"GRP001-0.p"`) or directory hint (`"Problems/REL/REL001+0.p"`)
 - Register built-in provers: AISE Tableaux, Vampire, E-Prover, CVC5, Leo-III,
-  LEO-II, Zipperposition (also accepting the ticket alias `Zipperpin`), Lash
+  LEO-II, Zipperposition (also `Zipperpin`), Lash
 - Generate one SLURM job array per prover
 - Submit/query/cancel jobs via `hpc_connect`
 - Sync local TPTP problem selections to HPC storage
@@ -16,11 +17,35 @@ delegated to the local `hpc_connect` library from item #15.
 - Collect remote result files back into parsed SZS result structs
 - Parse SZS statuses and aggregate comparison reports
 - Persist run manifests, parsed results, config snapshots, and Livebook recovery data as JSON
-- Provide Kino dashboard, TPTP selection, monitor, and report panels for Livebook
-- Bundle one provider module and one Apptainer definition template per prover
+- Kino dashboard, TPTP selection, monitor, and report panels for Livebook
+- One provider module and Apptainer definition template per prover
 - Upload ATP prover definition files and build `.sif` images through `hpc_connect`
-- Provide an optional Oban scheduler boundary for host applications that want nightly runs
-- Emit webhook payloads and email-ready Markdown completion summaries
+- Optional Oban scheduler for nightly runs
+- Webhook and email-ready completion summaries
+
+## Quick start
+
+```elixir
+# Point at your TPTP install or let it default to ./tmp/tptp
+System.put_env("TPTP_ROOT", "./tmp/tptp")
+
+# Or download the official archive (~881MB) straight from Livebook:
+AtpBenchmarkRunner.ensure_tptp_archive(root_dir: "./tmp/tptp")
+
+# Pick problems by name — resolved from user dir, bundled, or archive
+problems = AtpBenchmarkRunner.select_problems([
+  "GRP001-0.p", "LAT001+0.p", "Problems/REL/REL001+0.p"
+])
+
+# Run a local benchmark
+plan = AtpBenchmarkRunner.bootstrap([:vampire, :eprover], problems,
+  mode: :local, timeout_seconds: 120, auto_ensure_images: true
+)
+results = AtpBenchmarkRunner.run_benchmark(plan)
+AtpBenchmarkRunner.results_table(results)
+```
+
+See `examples/benchmark_local.livemd` for the full notebook.
 
 ## Apptainer image build workflow
 
@@ -67,39 +92,75 @@ AtpBenchmarkRunner.smoke_validate_images!(session, run.provers)
 
 ## TPTP problem management
 
-Local problem storage is configured through `.env` with
-`ATP_BENCHMARK_RUNNER_TPTP_DIR`. The example `.env` points at the workspace-level
-`tmp/tptp_problems` directory used for copied examples from item #12. Livebook
-can instead use its cache directory via `AtpBenchmarkRunner.tptp_panel/1`.
+Three ways to get problem files:
+
+**1. Drop files into the user examples dir** — `<tptp_dir>/user_examples/`. Highest priority,
+checked before everything else. Overrides same-named files from the archive or bundled
+examples. Just put your `.p` or `.ax` files there.
+
+**2. Bundled smoke examples** — `priv/tptp_examples/`. Auto-copied to `./tmp/tptp_examples/`
+on first use. 12 tiny problems across CNF, FOF and THF, good for quick smoke tests.
+
+**3. Full TPTP archive** — download and extract the official distribution from tptp.org
+(large, opt-in). Installed under `<tptp_dir>/TPTP-v9.2.1/`.
+
+Important env vars:
+
+| Var                                         | Default                            | What                       |
+| ------------------------------------------- | ---------------------------------- | -------------------------- |
+| `TPTP_ROOT`                                 | `./tmp/tptp`                       | TPTP library root          |
+| `ATP_BENCHMARK_RUNNER_USER_EXAMPLES_DIR`    | `<TPTP_ROOT>/user_examples`        | Your custom problem files  |
+| `ATP_BENCHMARK_RUNNER_BUNDLED_EXAMPLES_DIR` | `./tmp/tptp_examples`              | Bundled smoke example copy |
+| `ATP_BENCHMARK_RUNNER_STORE_DIR`            | `./tmp/atp_benchmark_runner_store` | Run results and reports    |
+
+Picking problems by name:
 
 ```elixir
-# Tiny bundled smoke examples, safe for tests and first notebooks.
+# Bare filenames — resolved from user dir, bundled tmp, or archive index
+AtpBenchmarkRunner.select_problems(["GRP001-0.p", "LAT001+0.p", "USR001+0.ax"])
+
+# With directory hint
+AtpBenchmarkRunner.select_problems([
+  "Problems/REL/REL001+0.p",
+  "Axioms/SET/SET001+0.ax"
+])
+```
+
+If a file is not found anywhere, it's skipped with a warning that lists
+the checked directories.
+
+```elixir
+# Tiny bundled smoke examples
 AtpBenchmarkRunner.install_tptp_examples!()
 
-# Full official distribution, opt-in because it is large.
+# Full official distribution (opt-in, ~881MB)
 AtpBenchmarkRunner.ensure_tptp_archive(version: "9.2.1")
 
+# Filter by form, rating, domain — only with full archive
 problems =
    AtpBenchmarkRunner.load_tptp_problems(
       forms: ["THF", "FOF"],
       rating_max: 0.25,
       limit: 100
    )
-
-remote_problems = AtpBenchmarkRunner.sync_tptp_problems!(session, problems)
 ```
 
 ## Local / Livebook usage
 
 ```elixir
-# 1. Bootstrap a plan — does not execute anything
+# 1. Pick problems by name — resolved from user dir, bundled tmp, or archive
+problems = AtpBenchmarkRunner.select_problems([
+  "GRP001-0.p", "LAT001+0.p", "Problems/REL/REL001+0.p"
+])
+
+# 2. Bootstrap a plan
 plan = AtpBenchmarkRunner.bootstrap(provers, problems,
   mode: :local,
   timeout_seconds: 120,
   auto_ensure_images: true
 )
 
-# 2. Run the benchmark — prints timing info
+# 3. Run the benchmark
 results = AtpBenchmarkRunner.run_benchmark(plan)
 
 # 3. Results table (markdown table printed to stdout)

@@ -2,8 +2,9 @@ defmodule AtpBenchmarkRunner.TPTP do
   @moduledoc """
   TPTP problem library management.
 
-  Supports three practical workflows:
+  Supports four practical workflows:
 
+  - drop user-supplied TPTP files into `./tmp/tptp_user_examples/` (highest priority)
   - use already copied local TPTP files, such as `tmp/tptp_problems`
   - install bundled tiny smoke examples from `priv/tptp_examples`
   - explicitly download and extract the official full TPTP archive
@@ -70,11 +71,29 @@ defmodule AtpBenchmarkRunner.TPTP do
 
   @doc """
   Installs bundled tiny TPTP-style examples into the configured root.
+
+  Default destination resolves as follows:
+    - `:destination` option if given
+    - `bundled_dir/1` (auto-populated tmp dir, `./tmp/tptp_examples`)
+    - Falls back to `root_dir/bundled_examples` if `:root_dir` option is given
+
+  The tmp bundled dir (`bundled_dir/0`) is auto-populated on first
+  `select`/`resolve_problem_name` call anyway, so explicit installation
+  is only needed for custom locations.
   """
   @spec install_examples!(keyword()) :: [binary()]
   def install_examples!(opts \\ []) do
     destination =
-      Keyword.get(opts, :destination, Path.join(default_root(opts), "bundled_examples"))
+      cond do
+        Keyword.has_key?(opts, :destination) ->
+          Keyword.fetch!(opts, :destination)
+
+        Keyword.has_key?(opts, :root_dir) ->
+          Path.join(Keyword.fetch!(opts, :root_dir), "bundled_examples")
+
+        true ->
+          bundled_dir()
+      end
 
     force? = Keyword.get(opts, :force, false)
     File.mkdir_p!(destination)
@@ -104,9 +123,11 @@ defmodule AtpBenchmarkRunner.TPTP do
   Resolves a TPTP problem name to an actual file path.
 
   Searches in order:
-    1. The configured TPTP library root (`Problems/<domain>/<name>`, `Axioms/<domain>/<name>`)
-    2. The bundled `priv/tptp_examples/` directory
-    3. As a direct file path
+    1. The user examples tmp dir (`./tmp/tptp_user_examples/`) — highest priority
+    2. The bundled examples tmp dir (`./tmp/tptp_examples/`) — fast, no index needed
+    3. The configured TPTP library root (`Problems/<domain>/<name>`, `Axioms/<domain>/<name>`)
+    4. The legacy bundled `priv/tptp_examples/` directory
+    5. As a direct file path
 
   Accepts names like `"GRP001-0.p"`, `"problems/ana/ANA002-4.p"`,
   `"axioms/AGT001+2.ax"`, or a full/relative path.
@@ -117,13 +138,17 @@ defmodule AtpBenchmarkRunner.TPTP do
 
     # Candidates in priority order
     candidates = [
+      # User examples tmp dir (fast File.exists?, highest priority)
+      fn -> resolve_in_user_dir(basename) end,
+      # Bundled examples tmp dir (fast File.exists?, no index needed)
+      fn -> resolve_in_bundled_dir(basename) end,
       # Explicit path with Problems/ or Axioms/ prefix
       fn -> resolve_in_tptp_root(name, opts) end,
       # Bare name in Problems subdirectories
       fn -> resolve_in_tptp_root("Problems/**/#{basename}", opts) end,
       # Bare name in Axioms subdirectories
       fn -> resolve_in_tptp_root("Axioms/**/#{basename}", opts) end,
-      # Bundled priv/tptp_examples
+      # Legacy bundled priv/tptp_examples
       fn -> resolve_bundled(basename) end,
       # Direct path
       fn -> if File.exists?(name), do: Path.expand(name) end
@@ -133,34 +158,17 @@ defmodule AtpBenchmarkRunner.TPTP do
   end
 
   @doc """
-  Selects benchmark problems flexibly.
+  Select benchmark problems by name list or filter options.
 
-  Accepts a keyword list (options below) or a plain list of TPTP names:
-
-      # Plain name list — shortest form
+      # By name
       AtpBenchmarkRunner.TPTP.select(["ANA002-4.p", "GRP001-0.p"])
 
-      # Keyword with explicit names
-      AtpBenchmarkRunner.TPTP.select(names: ["ANA002-4.p"])
-
-      # Rating-filtered from archive (falls back to bundled examples)
+      # By filter (requires full archive)
       AtpBenchmarkRunner.TPTP.select(rating_max: 0.1, limit: 15)
 
-  ## Options
-
-    * `:names` — explicit list of TPTP problem names/paths to load.
-      Also accepted as a bare list (first argument, no keyword wrapper).
-
-    * `:root_dir` — TPTP archive root (auto-detected; falls back to bundled).
-
-    * `:limit` — max number of problems (default from archive: 15, bundled: all).
-
-    * `:rating_min`, `:rating_max` — rating filter (only when `:names` is not set).
-
-    * `:logics`, `:domains`, `:statuses` — additional filters.
-
-  When no archive is found at `:root_dir` and no names are given, falls back
-  to the bundled `priv/tptp_examples` automatically.
+  Options: `:names`, `:root_dir`, `:limit`, `:rating_min`, `:rating_max`,
+  `:logics`, `:domains`, `:statuses`. Falls back to bundled examples when
+  no archive is found.
   """
   @spec select(keyword() | [binary()]) :: [Problem.t()]
   def select(opts \\ []) do
@@ -176,9 +184,27 @@ defmodule AtpBenchmarkRunner.TPTP do
 
     cond do
       is_list(names) and names != [] ->
-        Enum.map(names, fn name ->
+        Enum.flat_map(names, fn name ->
           path = resolve_problem_name(name, opts)
-          Problem.from_tptp_file(path, source: :tptp_name)
+
+          if path do
+            [Problem.from_tptp_file(path, source: :tptp_name)]
+          else
+            user_dir = Config.user_examples_dir()
+            bundled_dir = Config.bundled_examples_dir()
+
+            IO.warn(
+              "TPTP file not found, dropping: #{inspect(name)}\n" <>
+                "  Checked directories:\n" <>
+                "    #{user_dir}/\n" <>
+                "    #{bundled_dir}/\n" <>
+                "    TPTP library root (Problems/, Axioms/)\n" <>
+                "  Drop your .p / .ax files into: #{user_dir}/",
+              label: "AtpBenchmarkRunner.TPTP"
+            )
+
+            []
+          end
         end)
 
       archive_available?(opts) ->
@@ -225,14 +251,132 @@ defmodule AtpBenchmarkRunner.TPTP do
     root = opts |> root_opts() |> Keyword.fetch!(:root_dir) |> Index.library_root()
 
     if root do
-      candidate =
-        root
-        |> Path.join(pattern)
-        |> Path.wildcard()
-        |> List.first()
+      basename = Path.basename(pattern)
+      index = file_index(root)
 
-      if candidate && File.exists?(candidate), do: candidate
+      # Fast path: lookup from pre-built index
+      case Map.fetch(index, basename) do
+        {:ok, path} ->
+          path
+
+        :error ->
+          # Fallback: explicit pattern (for paths with subdirectory prefix)
+          candidate =
+            root
+            |> Path.join(pattern)
+            |> Path.wildcard()
+            |> List.first()
+
+          if candidate && File.exists?(candidate), do: candidate
+      end
     end
+  end
+
+  @doc false
+  # Builds and caches a name→path index of all TPTP files under the library root.
+  # Persisted as JSON on disk (survives kernel restarts) and cached in memory
+  # via process dictionary (avoids re-reading the file for every name lookup).
+  def file_index(root) when is_binary(root) do
+    cache_key = {:tptp_file_index, root}
+
+    case Process.get(cache_key) do
+      nil ->
+        index = load_or_build_index(root)
+        Process.put(cache_key, index)
+        index
+
+      cached ->
+        cached
+    end
+  end
+
+  defp load_or_build_index(root) do
+    cache_path = index_cache_path(root)
+
+    if File.exists?(cache_path) do
+      cache_path
+      |> File.read!()
+      |> Jason.decode!()
+      |> Map.new(fn {k, v} -> {k, v} end)
+    else
+      IO.puts("Building TPTP file index (one-time scan)...")
+      index = build_file_index(root)
+      File.mkdir_p!(Path.dirname(cache_path))
+      File.write!(cache_path, Jason.encode!(index, pretty: true))
+      index
+    end
+  end
+
+  defp index_cache_path(root) do
+    hash =
+      root
+      |> :erlang.md5()
+      |> Base.encode16(case: :lower)
+
+    tmp_root =
+      AtpBenchmarkRunner.Config.store_dir(dir: "./tmp")
+      |> Path.join("tptp_index")
+
+    Path.join(tmp_root, "index_#{hash}.json")
+  end
+
+  defp build_file_index(root) do
+    problems_root = Path.join(root, "Problems")
+    axioms_root = Path.join(root, "Axioms")
+
+    archive_index =
+      cond do
+        File.dir?(problems_root) ->
+          ((Path.join(problems_root, "**/*.{p,ax}") |> Path.wildcard()) ++
+             if(File.dir?(axioms_root),
+               do: Path.join(axioms_root, "**/*.{p,ax}") |> Path.wildcard(),
+               else: []
+             ))
+          |> Map.new(fn path -> {Path.basename(path), path} end)
+
+        File.dir?(axioms_root) ->
+          axioms_root
+          |> Path.join("**/*.{p,ax}")
+          |> Path.wildcard()
+          |> Map.new(fn path -> {Path.basename(path), path} end)
+
+        true ->
+          %{}
+      end
+
+    # Always include bundled examples so they resolve instantly via the index,
+    # even when no full archive is present.
+    bundled_index =
+      bundled_example_paths()
+      |> Map.new(fn path -> {Path.basename(path), path} end)
+
+    # Also scan the tmp bundled dir (auto-populated copy in ./tmp/tptp_examples)
+    tmp_bundled_index =
+      if File.dir?(Config.bundled_examples_dir()) do
+        Config.bundled_examples_dir()
+        |> Path.join("*.{p,ax}")
+        |> Path.wildcard()
+        |> Map.new(fn path -> {Path.basename(path), path} end)
+      else
+        %{}
+      end
+
+    # User examples dir — merged LAST so its entries override any duplicates
+    # from archive or bundled sources.
+    user_index =
+      if File.dir?(Config.user_examples_dir()) do
+        Config.user_examples_dir()
+        |> Path.join("*.{p,ax}")
+        |> Path.wildcard()
+        |> Map.new(fn path -> {Path.basename(path), path} end)
+      else
+        %{}
+      end
+
+    archive_index
+    |> Map.merge(bundled_index)
+    |> Map.merge(tmp_bundled_index)
+    |> Map.merge(user_index)
   end
 
   defp resolve_bundled(basename) do
@@ -244,6 +388,48 @@ defmodule AtpBenchmarkRunner.TPTP do
     root = opts |> root_opts() |> Keyword.fetch!(:root_dir)
     lib = Index.library_root(root)
     File.dir?(Path.join(lib, "Problems"))
+  end
+
+  @doc false
+  # Returns the path to the tmp bundled examples directory.
+  # Auto-populated on first access from priv/tptp_examples.
+  def bundled_dir do
+    dest = Config.bundled_examples_dir()
+    ensure_bundled_dir_installed!(dest)
+    dest
+  end
+
+  @doc false
+  # Returns the path to the user examples directory (`./tmp/tptp_user_examples`).
+  # Created if missing; users drop their own `.p` / `.ax` files here.
+  def user_dir do
+    dest = Config.user_examples_dir()
+    File.mkdir_p!(dest)
+    dest
+  end
+
+  defp ensure_bundled_dir_installed!(dest) do
+    File.mkdir_p!(dest)
+
+    # Only copy if the dir is empty (one-time auto-install)
+    if File.ls!(dest) == [] do
+      bundled_example_paths()
+      |> Enum.each(fn source ->
+        File.cp!(source, Path.join(dest, Path.basename(source)))
+      end)
+    end
+
+    dest
+  end
+
+  defp resolve_in_user_dir(basename) do
+    candidate = Path.join(user_dir(), basename)
+    if File.exists?(candidate), do: candidate
+  end
+
+  defp resolve_in_bundled_dir(basename) do
+    candidate = Path.join(bundled_dir(), basename)
+    if File.exists?(candidate), do: candidate
   end
 
   defp bundled_example_paths do

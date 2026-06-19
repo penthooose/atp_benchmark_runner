@@ -1,19 +1,19 @@
 defmodule AtpBenchmarkRunner.Config do
   @moduledoc """
-  Environment-backed configuration helpers for local scripts and Livebook.
+  Environment-backed config via `.env`, env vars, or options.
 
-  The project intentionally keeps paths configurable through `.env` so the same
-  notebook can run on Windows, Linux, or a hosted Livebook server without hard
-  coding machine-local directories in benchmark cells.
+  Keeps paths portable across Windows, Linux and Livebook.
   """
 
   alias AtpBenchmarkRunner.Store
 
   @env_file_var "ATP_BENCHMARK_RUNNER_ENV_FILE"
-  @tptp_dir_var "ATP_BENCHMARK_RUNNER_TPTP_DIR"
+  @tptp_dir_var "TPTP_ROOT"
   @store_dir_var "ATP_BENCHMARK_RUNNER_STORE_DIR"
   @cache_dir_var "ATP_BENCHMARK_RUNNER_CACHE_DIR"
   @smt_tmp_dir_var "ATP_BENCHMARK_RUNNER_SMT_TMP_DIR"
+  @bundled_examples_dir_var "ATP_BENCHMARK_RUNNER_BUNDLED_EXAMPLES_DIR"
+  @user_examples_dir_var "ATP_BENCHMARK_RUNNER_USER_EXAMPLES_DIR"
 
   @doc """
   Loads configuration values from the configured `.env` file.
@@ -76,6 +76,44 @@ defmodule AtpBenchmarkRunner.Config do
     |> option_value([:smt_tmp_dir])
     |> first_present(get(@smt_tmp_dir_var, opts))
     |> first_present(Path.expand("./tmp/smt_converted"))
+    |> expand_path()
+  end
+
+  @doc """
+  Returns the directory where bundled TPTP examples are copied for fast local access.
+
+  Auto-populated on first use from `priv/tptp_examples/`, then checked before
+  the file index to avoid slow `:code.priv_dir/1` or stale JSON-cache lookups.
+
+  Configure via `ATP_BENCHMARK_RUNNER_BUNDLED_EXAMPLES_DIR` env var or the
+  `:bundled_dir` option. Falls back to `./tmp/tptp_examples`.
+  """
+  @spec bundled_examples_dir(keyword()) :: binary()
+  def bundled_examples_dir(opts \\ []) do
+    opts
+    |> option_value([:bundled_examples_dir, :bundled_dir])
+    |> first_present(get(@bundled_examples_dir_var, opts))
+    |> first_present(Path.expand("./tmp/tptp_examples"))
+    |> expand_path()
+  end
+
+  @doc """
+  Returns the directory where users can place their own TPTP problem files.
+
+  This dir is checked first (before bundled examples or the official TPTP
+  archive) when resolving problem names. Files here take priority over
+  same-named files in any other location. Users simply drop `.p` / `.ax`
+  files into this directory.
+
+  Configure via `ATP_BENCHMARK_RUNNER_USER_EXAMPLES_DIR` env var or the
+  `:user_dir` option. Defaults to `<tptp_dir>/user_examples`.
+  """
+  @spec user_examples_dir(keyword()) :: binary()
+  def user_examples_dir(opts \\ []) do
+    opts
+    |> option_value([:user_examples_dir, :user_dir])
+    |> first_present(get(@user_examples_dir_var, opts))
+    |> first_present(Path.join(tptp_dir(opts), "user_examples"))
     |> expand_path()
   end
 

@@ -13,12 +13,10 @@ defmodule AtpBenchmarkRunner.Store.LocalDb do
   @db_file "atp_benchmark_runner.dets"
 
   @doc """
-  Returns a unique DETS table name for a given database path.
+  Unique DETS table name per database path.
 
-  The runner uses Erlang DETS, which is a global-name registry. Reusing the
-  same table name across two `.dets` files causes reads from one file to
-  silently hit the other. We derive a deterministic but path-specific table
-  name so each database file gets its own DETS table.
+  DETS uses a global name registry — same name, different file = silent
+  cross-talk. We hash the path to keep tables isolated.
   """
   @spec table_name(binary()) :: atom()
   def table_name(db_path) when is_binary(db_path) do

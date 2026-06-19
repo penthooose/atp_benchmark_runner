@@ -51,13 +51,8 @@ defmodule AtpBenchmarkRunner.HPC.Images do
   end
 
   @doc """
-  Returns the strategy used to connect ATP-specific defs with `hpc_connect`.
-
-  We deliberately do **not** copy ATP definitions into the dependency's `priv/`
-  directory. Mix dependencies are implementation artifacts and may be fetched,
-  compiled, or replaced. `hpc_connect` already exposes a public
-  `upload_def_file/3` API that accepts arbitrary local definition paths, so this
-  library keeps ownership of prover definitions and delegates transport/building.
+  Strategy: we keep ATP defs in this project, not in hpc_connect's priv/.
+  Upload happens via hpc_connect's public `upload_def_file/3` API.
   """
   @spec integration_strategy() :: map()
   def integration_strategy do
