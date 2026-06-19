@@ -10,21 +10,22 @@ Mix.install([
 ])
 ```
 
-## 1. Configuration
+## 1. Configuration — local storage
 
-Benchmark artifacts (runs, results, reports), TPTP problem files, and temp files
-are stored in configurable directories. The resolution order is: explicit option
-→ env var → application env → default (under `~/.cache/atp_benchmark_runner`).
+All benchmark data lives in `./tmp/`.
 
 ```elixir
-IO.puts("Store directory:        #{AtpBenchmarkRunner.store_dir()}")
-IO.puts("TPTP directory:         #{AtpBenchmarkRunner.tptp_dir()}")
-IO.puts("SMT temp directory:     #{AtpBenchmarkRunner.Config.smt_tmp_dir()}")
+AtpBenchmarkRunner.setup_local(tmp_root: Path.expand("./tmp", __DIR__))
+
+IO.puts("Store directory:   #{AtpBenchmarkRunner.store_dir()}")
+IO.puts("TPTP directory:    #{AtpBenchmarkRunner.tptp_dir()}")
+IO.puts("SMT temp dir:      #{AtpBenchmarkRunner.Config.smt_tmp_dir()}")
 ```
 
-Override any of these via environment variables (e.g., set
-`ATP_BENCHMARK_RUNNER_STORE_DIR` or `ATP_BENCHMARK_RUNNER_TPTP_DIR`), or pass
-options directly to the API functions.
+Override any of these individually via environment variables, or pass `:dir`
+/ `:root_dir` options directly to individual API functions. Without the
+`setup_local` call (or equivalent env vars), everything falls back to
+`~/.cache/atp_benchmark_runner`.
 
 ## 2. Download TPTP from tptp.org (optional)
 

@@ -54,6 +54,32 @@ defmodule AtpBenchmarkRunner do
   def tptp_dir(opts \\ []), do: Config.tptp_dir(opts)
 
   @doc """
+  One-call local Livebook setup: redirects all storage into `./tmp/` next to
+  the notebook, keeping the workspace self-contained and easy to clean up.
+
+  Call this as the first cell in your Livebook, right after Mix.install:
+
+      AtpBenchmarkRunner.setup_local(tmp_root: Path.expand("./tmp", __DIR__))
+
+  Sets `ATP_BENCHMARK_RUNNER_STORE_DIR`, `ATP_BENCHMARK_RUNNER_TPTP_DIR`, and
+  `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` to subdirectories of `tmp_root`. Without
+  this call (or the equivalent env vars), everything falls back to
+  `~/.cache/atp_benchmark_runner`.
+  """
+  @spec setup_local(keyword()) :: :ok
+  def setup_local(opts \\ []) do
+    tmp_root =
+      opts
+      |> Keyword.get(:tmp_root, "./tmp")
+      |> Config.expand_path()
+
+    System.put_env("ATP_BENCHMARK_RUNNER_STORE_DIR", Path.join(tmp_root, "store"))
+    System.put_env("ATP_BENCHMARK_RUNNER_TPTP_DIR", Path.join(tmp_root, "tptp"))
+    System.put_env("ATP_BENCHMARK_RUNNER_SMT_TMP_DIR", Path.join(tmp_root, "smt_converted"))
+    :ok
+  end
+
+  @doc """
   Converts a TPTP problem file to SMT-LIB format string.
 
   Useful when running provers (like CVC5) that don't natively parse TPTP.
@@ -74,7 +100,7 @@ defmodule AtpBenchmarkRunner do
 
   Returns the path to the written `.smt2` file.
 
-  The temp directory is resolved via `Config.smt_tmp_dir/1` and can be
+  The temp directory is resolved via `Config.smt_tmpr/1` and can be
   configured with `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` env var.
   """
   @spec convert_tptp_to_smt_path!(binary(), keyword()) :: binary()
