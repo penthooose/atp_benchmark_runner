@@ -43,7 +43,7 @@ defmodule AtpBenchmarkRunner.Config do
     |> first_present(get(@tptp_dir_var, opts))
     |> first_present(get("TPTP_DIR", opts))
     |> first_present(Application.get_env(:atp_benchmark_runner, :tptp_dir))
-    |> first_present(Path.join([Store.default_dir(), "tptp"]))
+    |> first_present(Path.expand("./tmp/tptp"))
     |> expand_path()
   end
 
@@ -68,14 +68,14 @@ defmodule AtpBenchmarkRunner.Config do
   Returns the temporary directory used for TPTP-to-SMT converted files.
 
   Configure via `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` env var or the `:smt_tmp_dir` option.
-  Falls back to `System.tmp_dir!() |> Path.join("atp_smt_converted")`.
+  Falls back to `./tmp/smt_converted`.  Set `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` to override.
   """
   @spec smt_tmp_dir(keyword()) :: binary()
   def smt_tmp_dir(opts \\ []) do
     opts
     |> option_value([:smt_tmp_dir])
     |> first_present(get(@smt_tmp_dir_var, opts))
-    |> first_present(Path.join(System.tmp_dir!(), "atp_smt_converted"))
+    |> first_present(Path.expand("./tmp/smt_converted"))
     |> expand_path()
   end
 

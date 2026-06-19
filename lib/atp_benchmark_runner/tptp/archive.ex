@@ -55,7 +55,7 @@ defmodule AtpBenchmarkRunner.TPTP.Archive do
       id: :tptp_full,
       label: "TPTP v#{@current_version} full library",
       version: @current_version,
-      url: "#{@base_url}/#{archive_name}",
+      url: "#{@base_url}/Distribution/#{archive_name}",
       archive_name: archive_name,
       size: "881MB",
       expands_to: "9.9GB",

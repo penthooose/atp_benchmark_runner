@@ -184,6 +184,33 @@ defmodule AtpBenchmarkRunner do
   def load_tptp_problems(opts \\ []), do: TPTP.load_problem_set(opts)
 
   @doc """
+  Selects benchmark problems flexibly.
+
+  Accepts a keyword list (options below) or a plain list of TPTP names:
+
+      # Shortest form — just the names
+      problems = AtpBenchmarkRunner.select_problems(["GRP001-0.p", "ANA002-4.p"])
+
+      # Explicit keyword
+      problems = AtpBenchmarkRunner.select_problems(
+        names: ["GRP001-0.p", "ANA002-4.p", "axioms/AGT001+2.ax"]
+      )
+
+      # Rating-filtered from archive (falls back to bundled examples)
+      problems = AtpBenchmarkRunner.select_problems(rating_max: 0.1, limit: 15)
+
+  See AtpBenchmarkRunner.TPTP.select/1 for all options.
+  """
+  @spec select_problems(keyword() | [binary()]) :: [AtpBenchmarkRunner.Problem.t()]
+  def select_problems(opts \\ []), do: TPTP.select(opts)
+
+  @doc """
+  Resolves a TPTP problem name to a file path across multiple locations.
+  """
+  @spec resolve_tptp_name(binary(), keyword()) :: binary() | nil
+  def resolve_tptp_name(name, opts \\ []), do: TPTP.resolve_problem_name(name, opts)
+
+  @doc """
   Builds a plan for syncing local TPTP files to HPC storage.
   """
   @spec tptp_sync_plan(HpcConnect.Session.t(), [AtpBenchmarkRunner.Problem.t()], keyword()) ::

@@ -12,55 +12,61 @@ Mix.install([
 
 ## 1. Configuration — local storage
 
-All benchmark data lives in `./tmp/`.
+All benchmark data lives in `./tmp/` by default. Override via environment
+variables (`ATP_BENCHMARK_RUNNER_STORE_DIR`, `ATP_BENCHMARK_RUNNER_TPTP_DIR`,
+`ATP_BENCHMARK_RUNNER_SMT_TMP_DIR`) or pass `:dir`/`:root_dir` options to
+individual API functions.
 
 ```elixir
-AtpBenchmarkRunner.setup_local(tmp_root: Path.expand("./tmp", __DIR__))
-
 IO.puts("Store directory:   #{AtpBenchmarkRunner.store_dir()}")
 IO.puts("TPTP directory:    #{AtpBenchmarkRunner.tptp_dir()}")
 IO.puts("SMT temp dir:      #{AtpBenchmarkRunner.Config.smt_tmp_dir()}")
 ```
 
-Override any of these individually via environment variables, or pass `:dir`
-/ `:root_dir` options directly to individual API functions. Without the
-`setup_local` call (or equivalent env vars), everything falls back to
-`~/.cache/atp_benchmark_runner`.
+## 2. Point to your TPTP library
 
-## 2. Download TPTP from tptp.org (optional)
+Set `ATP_BENCHMARK_RUNNER_TPTP_DIR` or adjust the path below to your
+downloaded TPTP archive.
 
-For a full benchmark, download the official TPTP library. The bundled examples
-are sufficient for smoke tests.
+```elixir
+# Already downloaded? Uncomment and set the path to skip the download step:
+# System.put_env("ATP_BENCHMARK_RUNNER_TPTP_DIR", "C:/Users/Paul/.../tmp/tptp")
+
+tptp_lib = AtpBenchmarkRunner.TPTP.library_root(root_dir: AtpBenchmarkRunner.tptp_dir())
+IO.puts("TPTP library root: #{tptp_lib}")
+IO.puts("Problems directory exists: #{File.dir?(Path.join(tptp_lib, "Problems"))}")
+```
+
+## 3. Download TPTP from tptp.org (optional — skip if already downloaded)
 
 ```elixir
 # Download and extract the official TPTP archive (∼881MB, expands to ∼9.9GB).
-# This is a one-time operation; subsequent calls skip if already extracted.
+# Skip this if you already have it (see step 2).
 
 archive = AtpBenchmarkRunner.ensure_tptp_archive(
-  # root_dir: AtpBenchmarkRunner.tptp_dir(),  # uncomment to use configured dir
+  root_dir: AtpBenchmarkRunner.tptp_dir(),
   force: false
 )
 
 case archive do
   {:ok, path} ->
     IO.puts("TPTP archive ready at: #{path}")
-    IO.puts("Library root: #{AtpBenchmarkRunner.Config.tptp_dir() |> Path.join("TPTP-v9.2.1")}")
   {:error, reason} ->
     IO.puts("Download skipped or failed: #{inspect(reason)}")
-    IO.puts("Falling back to bundled examples — see step 4.")
+    IO.puts("(This is fine if you already have it — see step 2)")
 end
 ```
 
-## 3. Detect available execution methods
+## 4. Detect available execution methods
 
 ```elixir
 avail = AtpBenchmarkRunner.LocalRunner.detect_available()
 ```
 
-## 4. Pre-build container images
+## 5. Pre-build container images
 
 Missing images are also automatically built / pulled when `auto_ensure_images: true` is
-set in step 7.
+set in step 8.
 
 ```elixir
 build_provers = [:eprover, :vampire, :cvc5, :zipperposition, :leo3]
@@ -82,47 +88,46 @@ end)
 
 ---
 
-## 5. Install bundled TPTP test examples
+## 6. Select benchmark problems
+
+Pass a plain list of TPTP filenames (no keyword wrapper needed). Falls back
+to bundled `priv/tptp_examples` when no full archive is available.
+
+> **TPTP naming:** `ANA002-4.p` — the `-4` is a _version number_, not a
+> difficulty rating. Actual difficulty is the `Rating:` field (0.00–1.00) in
+> each problem's TPTP header comments.
 
 ```elixir
-tptp_root =
-  AtpBenchmarkRunner.Config.tptp_dir(
-    tptp_dir: Path.expand("./tmp/benchmark_tptp", __DIR__)
-  )
-
-IO.puts("TPTP root: #{tptp_root}")
-
-paths = AtpBenchmarkRunner.install_tptp_examples!(
-  root_dir: tptp_root,
-  force: true
-)
-
-IO.puts("Installed #{length(paths)} example problems:")
-Enum.each(paths, &IO.puts("  - #{&1}"))
-```
-
----
-
-## 6. Load problems and inspect metadata
-
-```elixir
-problems =
-  AtpBenchmarkRunner.load_tptp_problems(
-    root_dir: tptp_root,
-    limit: 10
-  )
+problems = AtpBenchmarkRunner.select_problems([
+  "ALG001+0.p",
+  "GRP001-0.p",
+  "GRP002+0.p",
+  "GRP003+0.p",
+  "GRP004+0.p",
+  "LAT001+0.p",
+  "PUZ001+0.p",
+  "REL001+0.p",
+  "SET001^0.p",
+  "SYN000+0.p",
+  "THF001+0.p"
+])
 
 IO.puts("Loaded #{length(problems)} problem(s):\n")
 
-header = "| Name | Logic | Rating | Expected |"
-sep    = "|------|-------|--------|----------|"
+header = "| Name | Domain | Logic | Rating | Expected |"
+sep    = "|------|--------|-------|--------|----------|"
 
 IO.puts(header)
 IO.puts(sep)
 
 Enum.each(problems, fn p ->
-  IO.puts("| #{p.name} | #{p.logic || "?"} | #{p.rating} | #{p.expected_status || "?"} |")
+  IO.puts("| #{p.name} | #{p.domain || "?"} | #{p.logic || "?"} | #{p.rating} | #{p.expected_status || "?"} |")
 end)
+
+# Show a summary
+summary = AtpBenchmarkRunner.TPTP.summarize(problems)
+IO.puts("")
+IO.puts("Summary: #{summary.count} problems loaded")
 ```
 
 ---

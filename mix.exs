@@ -28,7 +28,7 @@ defmodule AtpBenchmarkRunner.MixProject do
       {:jason, "~> 1.4"},
       {:kino, "~> 0.13"},
       {:hpc_connect, github: "penthooose/hpc_connect", force: true},
-      {:req, "~> 0.5", optional: true},
+      {:req, "~> 0.5"},
       {:oban, "~> 2.19", optional: true}
     ]
   end

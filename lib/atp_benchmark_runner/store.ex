@@ -10,8 +10,6 @@ defmodule AtpBenchmarkRunner.Store do
   alias AtpBenchmarkRunner.{Result, Run}
   alias AtpBenchmarkRunner.Store.LocalDb
 
-  @app_dir "atp_benchmark_runner"
-
   @doc """
   Returns the configured cache/store directory.
   """
@@ -19,7 +17,7 @@ defmodule AtpBenchmarkRunner.Store do
   def default_dir do
     System.get_env("ATP_BENCHMARK_RUNNER_CACHE_DIR") ||
       Application.get_env(:atp_benchmark_runner, :store_dir) ||
-      Path.join([home_or_tmp(), ".cache", @app_dir])
+      Path.expand("./tmp/atp_benchmark_runner_store")
   end
 
   @doc """
@@ -220,12 +218,5 @@ defmodule AtpBenchmarkRunner.Store do
     name
     |> to_string()
     |> String.replace(~r/[^A-Za-z0-9_.-]+/, "_")
-  end
-
-  defp home_or_tmp do
-    case System.user_home() do
-      nil -> System.tmp_dir!()
-      home -> home
-    end
   end
 end

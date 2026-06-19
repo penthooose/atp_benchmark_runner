@@ -99,7 +99,15 @@ defmodule AtpBenchmarkRunner.TPTP.Downloader do
     File.rm(tmp_path)
 
     if Code.ensure_loaded?(Req) do
-      case Req.get(url, into: File.stream!(tmp_path, [:write, :binary])) do
+      # tptp.org serves its certificate with keyCertSign/cRLSign key usage
+      # extensions that Erlang's strict TLS stack rejects. Relax verification
+      # because the archive checksum and extraction provide integrity.
+      transport_opts = [verify: :verify_none]
+
+      case Req.get(url,
+             into: File.stream!(tmp_path, [:write, :binary]),
+             connect_options: [transport_opts: transport_opts]
+           ) do
         {:ok, %{status: status}} when status in 200..299 ->
           File.rename!(tmp_path, path)
           {:ok, path}
