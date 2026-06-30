@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: ubuntu:24.04
+From: alpine:latest
 
 %labels
     Maintainer AISE Bamberg
@@ -8,33 +8,46 @@ From: ubuntu:24.04
 
 %post
     set -eux
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y --no-install-recommends ca-certificates curl file xz-utils
+    # apk does not use setgroups/privilege-dropping like apt-get, so it works
+    # on FAU compute nodes where user namespaces are restricted.
+    apk add --no-cache curl ca-certificates jq unzip
     arch="$(uname -m)"
     case "$arch" in
-      x86_64|amd64) asset_pattern='Linux.*x86_64|linux.*x86_64';;
-      aarch64|arm64) asset_pattern='Linux.*arm64|linux.*arm64|aarch64';;
-      *) asset_pattern='Linux|linux';;
+      x86_64|amd64) asset_pattern='Linux-x86_64-static' ;;
+      aarch64|arm64) asset_pattern='Linux-arm64-static' ;;
+      *) asset_pattern='Linux' ;;
     esac
     curl -fsSL https://api.github.com/repos/cvc5/cvc5/releases/latest -o /tmp/cvc5_release.json
-    url="$(grep -Eo 'https://[^\"]+' /tmp/cvc5_release.json | grep -Ei "$asset_pattern" | grep -Ei 'cvc5' | grep -Evi 'sha|sig|asc' | head -1 || true)"
+    url="$(jq -r '.assets[].browser_download_url' /tmp/cvc5_release.json \
+      | grep -Ei "$asset_pattern" | grep -Evi 'sha|sig|asc' | head -1 || true)"
     if [ -z "$url" ]; then
-      echo "Could not auto-detect a cvc5 release binary. Pin an asset URL in this definition." >&2
+      echo "Could not auto-detect a cvc5 release binary." >&2
       exit 1
     fi
     curl -fL "$url" -o /tmp/cvc5.asset
-    if file /tmp/cvc5.asset | grep -qi 'compressed'; then
-      mkdir -p /tmp/cvc5_unpack
-      tar -xf /tmp/cvc5.asset -C /tmp/cvc5_unpack || true
-      found="$(find /tmp/cvc5_unpack -type f -name cvc5 | head -1)"
-      install -m 0755 "$found" /usr/local/bin/cvc5
-    else
-      install -m 0755 /tmp/cvc5.asset /usr/local/bin/cvc5
-    fi
-    cvc5 --version || true
-    apt-get clean
-    rm -rf /var/lib/apt/lists/* /tmp/*
+    # Check if the downloaded asset is a compressed archive
+    case "$url" in
+      *.tar.gz|*.tgz|*.tar.xz|*.tar.bz2|*.tar)
+        mkdir -p /tmp/cvc5_unpack
+        tar -xf /tmp/cvc5.asset -C /tmp/cvc5_unpack
+        found="$(find /tmp/cvc5_unpack -type f -name cvc5 | head -1)"
+        install -m 0755 "$found" /usr/local/bin/cvc5
+        rm -rf /tmp/cvc5_unpack
+        ;;
+      *.zip)
+        mkdir -p /tmp/cvc5_unpack
+        unzip -o /tmp/cvc5.asset -d /tmp/cvc5_unpack
+        found="$(find /tmp/cvc5_unpack -type f -path '*/bin/cvc5' | head -1)"
+        [ -n "$found" ]
+        install -m 0755 "$found" /usr/local/bin/cvc5
+        rm -rf /tmp/cvc5_unpack
+        ;;
+      *)
+        install -m 0755 /tmp/cvc5.asset /usr/local/bin/cvc5
+        ;;
+    esac
+    /usr/local/bin/cvc5 --version
+    rm -f /tmp/cvc5_release.json /tmp/cvc5.asset
 
 %runscript
     exec cvc5 "$@"

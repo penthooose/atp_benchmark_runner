@@ -224,7 +224,8 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
       true ->
         Images.ensure_for_run!(session, run.provers,
           build: true,
-          partition: hpc.partition,
+          use_slurm: true,
+          walltime: hpc.walltime,
           install_scripts: false
         )
 
