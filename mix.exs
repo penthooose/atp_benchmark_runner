@@ -23,11 +23,9 @@ defmodule AtpBenchmarkRunner.MixProject do
     [
       # Local path while item #15 is developed. Later replace with the public repo, e.g.:
       # {:hpc_connect, github: "<aise-org-or-user>/hpc_connect", tag: "v0.1.0"}
-      # {:hpc_connect, path: "../../item_15_Elixir_HPC_Connect_Library/hpc_connect"},
-
+      {:hpc_connect, path: "../../item_15_Elixir_HPC_Connect_Library/hpc_connect"},
       {:jason, "~> 1.4"},
       {:kino, "~> 0.13"},
-      {:hpc_connect, github: "penthooose/hpc_connect", force: true},
       {:req, "~> 0.5"},
       {:oban, "~> 2.19", optional: true}
     ]

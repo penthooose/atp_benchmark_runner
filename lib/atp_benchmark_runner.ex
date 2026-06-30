@@ -31,6 +31,8 @@ defmodule AtpBenchmarkRunner do
     HPC.TPTPSync
   }
 
+  alias AtpBenchmarkRunner.HPC.Config, as: HPCConfig
+
   @doc """
   Store dir for run manifests, results and reports.
 
@@ -350,19 +352,27 @@ defmodule AtpBenchmarkRunner do
     # keep mode check for future validation
     _ = mode
 
-    hpc_mode = Keyword.get(opts, :hpc_mode, :single_node)
     provers_norm = normalize_provers(provers)
     problems_norm = normalize_problems(problems)
 
+    hpc_config =
+      HPCConfig.resolve(session, Keyword.put(opts, :prover_count, length(provers_norm)))
+
     Run.new(
       title: Keyword.get(opts, :title, "HPC benchmark run"),
+      cluster: hpc_config.cluster,
+      partition: hpc_config.partition,
+      remote_root: hpc_config.remote_root,
+      walltime: hpc_config.walltime,
+      max_parallel_jobs: hpc_config.max_parallel_jobs,
       problems: problems_norm,
       provers: provers_norm,
       problem_timeout_seconds: Keyword.get(opts, :timeout_seconds, 60),
       metadata: %{
         mode: :hpc,
-        hpc_mode: hpc_mode,
-        session: session
+        hpc_mode: hpc_config.hpc_mode,
+        hpc: hpc_config,
+        session_config: session_config(session)
       }
     )
   end
@@ -393,13 +403,11 @@ defmodule AtpBenchmarkRunner do
             )
 
           :hpc ->
-            session = plan.metadata[:session]
-            hpc_mode = plan.metadata[:hpc_mode] || :single_node
+            session = session_from_plan(plan)
 
-            AtpBenchmarkRunner.HPC.Runner.bootstrap(session, plan.provers, plan.problems,
-              hpc_mode: hpc_mode,
-              timeout_seconds: plan.problem_timeout_seconds
-            )
+            plan
+            |> AtpBenchmarkRunner.HPC.Runner.run(session)
+            |> Map.fetch!(:results)
 
           _ ->
             raise ArgumentError, "Unknown mode in plan: #{inspect(mode)}"
@@ -700,6 +708,48 @@ defmodule AtpBenchmarkRunner do
   @spec write_email_summary!(map() | [map()], Run.t() | nil, keyword()) :: binary()
   def write_email_summary!(report_or_results, run \\ nil, opts \\ []),
     do: Notification.write_email_summary!(report_or_results, run, opts)
+
+  defp session_from_plan(%Run{metadata: %{session_config: session_config}})
+       when is_map(session_config) do
+    cluster = Map.get(session_config, :cluster) || Map.get(session_config, "cluster")
+
+    opts =
+      session_config
+      |> Map.drop([:cluster, "cluster"])
+      |> Enum.map(fn {key, value} -> {normalize_session_config_key(key), value} end)
+
+    HpcConnect.Session.new(cluster, opts)
+  end
+
+  defp session_from_plan(%Run{metadata: %{session: %HpcConnect.Session{} = session}}), do: session
+
+  defp session_from_plan(%Run{}) do
+    raise ArgumentError,
+          "HPC run plan is missing a serializable session_config. Rebuild the plan with AtpBenchmarkRunner.bootstrap/4."
+  end
+
+  defp session_config(%HpcConnect.Session{} = session) do
+    %{
+      cluster: session.cluster.name,
+      username: session.username,
+      ssh_alias: session.ssh_alias,
+      uploaded_key_path: session.uploaded_key_path,
+      identity_file: session.identity_file,
+      ssh_config_file: session.ssh_config_file,
+      known_hosts_file: session.known_hosts_file,
+      credential_dir: session.credential_dir,
+      proxy_jump: session.proxy_jump,
+      work_dir: session.work_dir,
+      vault_dir: session.vault_dir,
+      port_range: Tuple.to_list(session.port_range),
+      env: session.env
+    }
+  end
+
+  defp normalize_session_config_key("port_range"), do: :port_range
+  defp normalize_session_config_key(:port_range), do: :port_range
+  defp normalize_session_config_key(key) when is_binary(key), do: String.to_existing_atom(key)
+  defp normalize_session_config_key(key) when is_atom(key), do: key
 
   # --- Normalization helpers ---
 

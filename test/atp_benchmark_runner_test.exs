@@ -198,6 +198,95 @@ defmodule AtpBenchmarkRunnerTest do
     assert script =~ "memory_kb"
   end
 
+  test "builds single-node shared CPU script for one-node execution" do
+    run =
+      Run.new(
+        id: "run_single",
+        partition: "cpu",
+        problems: ["/remote/tptp/A.p", "/remote/tptp/B.ax"],
+        provers: [:vampire, :eprover],
+        problem_timeout_seconds: 45,
+        max_parallel_jobs: 3,
+        walltime: "03:00:00"
+      )
+
+    script =
+      JobScript.build_single_node(run, "/work/atp",
+        cpus_per_task: 3,
+        ntasks: 1,
+        nodes: 1,
+        exclusive: false,
+        single_node_mode: :parallel,
+        hpc_work_dir: "/home/hpc/test/.cache/hpc_connect"
+      )
+
+    assert script =~ "#SBATCH --job-name=atp_run_single_single"
+    assert script =~ "#SBATCH --partition=cpu"
+    assert script =~ "#SBATCH --cpus-per-task=3"
+    assert script =~ "export OMP_NUM_THREADS=1"
+    assert script =~ "export MKL_CBWR=AUTO"
+    assert script =~ "TASKS_FILE='/work/atp/run_single/single_node_tasks.tsv'"
+    assert script =~ "run_task \"$prover\" \"$problem_path\" \"$problem_id\" \"$command_b64\" &"
+  end
+
+  test "builds single-node sequential script when requested" do
+    run =
+      Run.new(
+        id: "run_single_seq",
+        partition: "cpu",
+        problems: ["/remote/tptp/A.p"],
+        provers: [:vampire],
+        problem_timeout_seconds: 45,
+        max_parallel_jobs: 3,
+        walltime: "03:00:00"
+      )
+
+    script =
+      JobScript.build_single_node(run, "/work/atp",
+        cpus_per_task: 1,
+        single_node_mode: :sequential
+      )
+
+    assert script =~ "run_task \"$prover\" \"$problem_path\" \"$problem_id\" \"$command_b64\""
+    refute script =~ "run_task \"$prover\" \"$problem_path\" \"$problem_id\" \"$command_b64\" &"
+  end
+
+  test "bootstrap stores HPC execution config without embedding live session structs" do
+    session =
+      HpcConnect.Session.local(
+        env_file: false,
+        cluster: :helma,
+        username: "tester",
+        ssh_alias: "helma",
+        identity_file: "~/.ssh/id_test",
+        proxy_jump: "csnhr.nhr.fau.de",
+        work_dir: "/home/hpc/test/tester/.cache/hpc_connect",
+        vault_dir: "/home/vault/test/tester"
+      )
+
+    [problem_path | _] =
+      AtpBenchmarkRunner.install_tptp_examples!(
+        root_dir: Path.join(System.tmp_dir!(), "atp_hpc_bootstrap")
+      )
+
+    plan =
+      AtpBenchmarkRunner.bootstrap(session, [:vampire], [problem_path],
+        mode: :hpc,
+        hpc_mode: :single_node,
+        single_node_mode: :sequential,
+        cpus_per_task: 2,
+        max_parallel_jobs: 2
+      )
+
+    assert plan.cluster == :helma
+    assert plan.partition == "cpu"
+    assert plan.max_parallel_jobs == 2
+    assert plan.metadata.hpc.hpc_mode == :single_node
+    assert plan.metadata.hpc.single_node_mode == :sequential
+    assert plan.metadata.session_config.cluster == :helma
+    refute Map.has_key?(plan.metadata, :session)
+  end
+
   test "aggregates SZS results into comparison report" do
     run =
       Run.new(

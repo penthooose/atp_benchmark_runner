@@ -1,0 +1,158 @@
+# HPC Benchmark
+
+```elixir
+project_root = Path.expand("..", __DIR__)
+
+Mix.install([
+	{:atp_benchmark_runner, path: project_root, force: true}
+])
+
+AtpBenchmarkRunner.setup_local(tmp_root: Path.join(project_root, "tmp"))
+```
+
+This notebook is the HPC counterpart to the local example. It uses the local
+workspace versions of both libraries because `atp_benchmark_runner` depends on
+the sibling `hpc_connect` path from its `mix.exs`.
+
+---
+
+## 1. Bootstrap the HPC session
+
+```elixir
+env_file = Path.join(project_root, ".env")
+
+boot =
+	HpcConnect.bootstrap(
+		mode: :local,
+		env_file: env_file
+	)
+
+session = boot.session
+
+IO.inspect(
+	%{
+		cluster: session.cluster.name,
+		ssh_alias: session.ssh_alias,
+		username: session.username,
+		work_dir: session.work_dir,
+		vault_dir: session.vault_dir
+	},
+	label: "Resolved HPC session"
+)
+```
+
+`HpcConnect.bootstrap/1` already installs the remote helper scripts and uploads
+the generic bundled `hpc_connect` def-file set. ATP prover definitions stay in
+`atp_benchmark_runner/priv/provers`, so ATP-specific image prep still goes
+through the benchmark-runner helpers below.
+
+---
+
+## 2. Pick provers and a tiny TPTP smoke set
+
+```elixir
+selected_provers = [:vampire, :cvc5]
+
+tptp_root = Path.join(project_root, "tmp/benchmark_hpc_tptp")
+
+AtpBenchmarkRunner.install_tptp_examples!(
+	root_dir: tptp_root,
+	force: true
+)
+
+problems =
+	AtpBenchmarkRunner.load_tptp_problems(
+		root_dir: tptp_root,
+		limit: 2
+	)
+
+IO.inspect(Enum.map(problems, &%{name: &1.name, path: &1.path}), label: "Problems")
+```
+
+---
+
+## 3. Inspect the remote image prep plan
+
+```elixir
+prover_structs = Enum.map(selected_provers, &AtpBenchmarkRunner.Prover.builtin!/1)
+
+image_plan =
+	AtpBenchmarkRunner.image_build_plan(
+		session,
+		prover_structs
+	)
+
+IO.inspect(image_plan, label: "Remote image build plan", limit: :infinity)
+```
+
+---
+
+## 4. Optionally prepare ATP prover images now
+
+```elixir
+prepare_images_now? = false
+
+if prepare_images_now? do
+	uploaded_defs =
+		AtpBenchmarkRunner.upload_prover_definitions!(
+			session,
+			prover_structs,
+			install_scripts: false
+		)
+
+	IO.inspect(uploaded_defs, label: "Uploaded ATP prover defs")
+
+	built_images =
+		AtpBenchmarkRunner.build_prover_images!(
+			session,
+			prover_structs,
+			install_scripts: false
+		)
+
+	IO.inspect(built_images, label: "Built ATP prover images")
+else
+	:ok
+end
+```
+
+---
+
+## 5. Bootstrap an HPC benchmark plan
+
+```elixir
+plan =
+	AtpBenchmarkRunner.bootstrap(
+		session,
+		selected_provers,
+		problems,
+		mode: :hpc,
+		hpc_mode: :single_node,
+		single_node_strategy: :direct_provers,
+		single_node_mode: :sequential,
+		timeout_seconds: 30,
+		wait_for_completion: false,
+		prepare_images: false
+	)
+
+IO.inspect(plan, label: "HPC benchmark plan", limit: :infinity)
+```
+
+If you want the runner itself to prepare missing prover images immediately
+before launch, set `prepare_images: true` in the benchmark plan above.
+
+---
+
+## 6. Optionally submit the run
+
+```elixir
+submit_run? = false
+
+results =
+	if submit_run? do
+		AtpBenchmarkRunner.run_benchmark(plan)
+	else
+		[]
+	end
+
+IO.inspect(results, label: "Results")
+```
