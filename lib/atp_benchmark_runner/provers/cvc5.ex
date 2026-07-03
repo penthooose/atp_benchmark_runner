@@ -16,7 +16,8 @@ defmodule AtpBenchmarkRunner.Provers.CVC5 do
       kind: :apptainer,
       sif_name: "cvc5",
       executable: "cvc5",
-      command_template: "apptainer exec {sif_path} cvc5 --tlimit={timeout_ms} {problem}",
+      command_template:
+        "apptainer exec {sif_path} cvc5 --lang=tptp --tlimit={timeout_ms} {problem}",
       metadata: %{
         logics: ["SMT-LIB", "TPTP where supported by cvc5 parser"],
         integration: :cli,

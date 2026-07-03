@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: ubuntu:24.04
+From: ocaml/opam:ubuntu-22.04-ocaml-4.12
 
 %labels
     Maintainer AISE Bamberg
@@ -7,52 +7,47 @@ From: ubuntu:24.04
     Source http://grid01.ciirc.cvut.cz/~chad/lash/
 
 %arguments
-    # Lash is not packaged in any standard distribution. Pin a known working
-    # source archive by passing --build-arg at build time. The default falls
-    # back to the upstream tarball advertised on the Lash homepage; if that
-    # link is dead, override LASH_URL.
-    LASH_URL http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tar.gz
+    LASH_URL = http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tar.gz
 
 %post
     set -eux
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y --no-install-recommends ca-certificates curl build-essential make ocaml
+    # Proxy for FAU compute node internet access (Fritz, Helma, etc.)
+    export HTTP_PROXY="http://proxy.nhr.fau.de:80"
+    export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
+    export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
+    export http_proxy="$HTTP_PROXY"
+    export https_proxy="$HTTPS_PROXY"
+    export no_proxy="$NO_PROXY"
+
+    # OCI extraction provides OCaml 4.12, opam, gcc, make, curl, git.
+    # No apt-get needed in %post — avoids setgroups/chown on FAU nodes.
+
     mkdir -p /opt/lash
-    curl -fL "${LASH_URL}" -o /tmp/lash.tar.gz
-    tar -xzf /tmp/lash.tar.gz -C /opt/lash --strip-components=1 || true
+    LASH_SRC="${LASH_URL:-http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz}"
+    curl -fSL "$LASH_SRC" -o /tmp/lash.tar.gz
+    tar -xzf /tmp/lash.tar.gz -C /opt/lash --strip-components=1
+    # After strip: Makefile + configure at /opt/lash/ top level
     cd /opt/lash
-    if [ -f Makefile ] || [ -f makefile ]; then
-      make || true
-    elif [ -f configure ]; then
-      ./configure && make || true
-    fi
-    candidate="$(find /opt/lash -maxdepth 3 -type f \( -name 'lash' -o -name 'lash.opt' -o -name 'lash.byte' \) | head -1 || true)"
+    ./configure
+    make -j$(nproc)
+    # Binary is produced in source/src/; find it anywhere under /opt/lash
+    candidate="$(find /opt/lash -maxdepth 4 -type f \( -name 'lash' -o -name 'lash.opt' -o -name 'lash.byte' \) | head -1 || true)"
     if [ -z "$candidate" ]; then
-      cat > /usr/local/bin/lash <<'EOF'
-#!/bin/sh
-echo "Lash container built but the upstream archive at $LASH_URL did not yield a binary." >&2
-echo "Pin a working LASH_URL via --build-arg or rebuild after a manual 'make' in /opt/lash." >&2
-exit 127
-EOF
-    else
-      install -m 0755 "$candidate" /usr/local/bin/lash
+      echo "ERROR: Lash binary not found after build." >&2
+      exit 1
     fi
-    chmod +x /usr/local/bin/lash
-    lash --help >/dev/null 2>&1 || true
-    apt-get clean
-    rm -rf /var/lib/apt/lists/* /tmp/*
+    install -m 0755 "$candidate" /usr/local/bin/lash
+    /usr/local/bin/lash --help >/dev/null 2>&1 || true
+    rm -rf /tmp/lash.tar.gz 2>/dev/null || true
 
 %runscript
     exec lash "$@"
 
 %help
     Build arguments:
-      --build-arg LASH_URL=<url>   Lash source tarball (default: upstream homepage tarball)
+      --build-arg LASH_URL=<url>   Lash source tarball (default: upstream)
 
-    Lash has limited public distribution; if the default URL is no longer
-    maintained, pin a mirror or local archive at build time. The runtime
-    will fall back to a stub binary that prints a clear diagnostic if no
-    Lash binary is produced.
-    This definition is intentionally permissive because Lash's distribution
-    history is fragile; replace with a hardened release URL once verified.
+    Source: http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz (confirmed working)
+    Tarball structure: lash-1.14rc1/source/configure → standard ./configure && make build.
+    The binary is installed to /usr/local/bin/lash.
+    Requires OCaml, gcc, make, git (provided by ocaml/opam:ubuntu-22.04-ocaml-4.12).

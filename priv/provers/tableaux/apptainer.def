@@ -1,45 +1,63 @@
 Bootstrap: docker
-From: hexpm/elixir:1.17.3-erlang-27.1-debian-bookworm-20240904-slim
+From: hexpm/elixir:1.17.3-erlang-27.1-debian-bookworm-20240904
 
 %labels
     Maintainer AISE Bamberg
-    Prover AISE Simple Tableaux Solver
-    Source ../item_12_Integrating_external_solvers_into_Elixir_and_Livebook/simple_tableaux_solver
+    Prover AISE Hybrid Tableaux Solver (Symbolic-only mode)
+    Source https://github.com/penthooose/hybrid_tableaux_solver
 
 %arguments
-    # Default to the official GitHub mirror if no source override is provided.
-    # Override at build time with: sudo apptainer build --build-arg TABLEAUX_REPO=<git-url> ...
-    TABLEAUX_REPO https://github.com/ase-build/simple_tableaux_solver.git
-    TABLEAUX_REF main
+    TABLEAUX_REPO = https://github.com/penthooose/hybrid_tableaux_solver.git
+    TABLEAUX_REF = main
 
 %post
     set -eux
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y --no-install-recommends ca-certificates build-essential git
+    # Proxy for FAU compute node internet access (Fritz, Helma, etc.)
+    export HTTP_PROXY="http://proxy.nhr.fau.de:80"
+    export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
+    export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
+    export http_proxy="$HTTP_PROXY"
+    export https_proxy="$HTTPS_PROXY"
+    export no_proxy="$NO_PROXY"
+
+    # OCI extraction already provides Erlang OTP 27.1 and Elixir 1.17.3,
+    # plus ca-certificates and built-in :httpc. No apt-get needed in %post.
+
     mix local.hex --force
     mix local.rebar --force
 
-    git clone --depth 1 --branch "${TABLEAUX_REF}" "${TABLEAUX_REPO}" /opt/simple_tableaux_solver
+    TABLEAUX_REPO="${TABLEAUX_REPO:-https://github.com/penthooose/hybrid_tableaux_solver.git}"
+    TABLEAUX_REF="${TABLEAUX_REF:-main}"
+    # Download source tarball using Erlang/Elixir built-in HTTP client (hexpm/elixir lacks curl/wget).
+    # Pass URL via env var because shell vars don't expand inside single-quoted -e argument.
+    export TABLEAUX_URL="https://github.com/penthooose/hybrid_tableaux_solver/archive/refs/heads/${TABLEAUX_REF}.tar.gz"
+    elixir -e '
+      :ssl.start()
+      :inets.start()
+      url = ~c"#{System.get_env("TABLEAUX_URL")}"
+      {:ok, {_, _, body}} = :httpc.request(:get, {url, []}, [{:timeout, 60000}], [{:body_format, :binary}])
+      File.write!("/tmp/tableaux.tar.gz", body)
+    '
+    mkdir -p /opt/simple_tableaux_solver
+    tar -xzf /tmp/tableaux.tar.gz -C /opt/simple_tableaux_solver --strip-components=1
     cd /opt/simple_tableaux_solver
     mix deps.get
     MIX_ENV=prod mix escript.build
     install -m 0755 simple_tableaux_solver /usr/local/bin/simple_tableaux_solver
-    simple_tableaux_solver --help >/dev/null 2>&1 || true
-
-    apt-get clean
-    rm -rf /var/lib/apt/lists/*
+    /usr/local/bin/simple_tableaux_solver --help >/dev/null 2>&1 || true
 
 %runscript
     exec simple_tableaux_solver "$@"
 
 %help
     Build arguments:
-      --build-arg TABLEAUX_REPO=<git-url>   source repository (default: GitHub mirror)
+      --build-arg TABLEAUX_REPO=<git-url>   source repository (default: GitHub)
       --build-arg TABLEAUX_REF=<ref>        branch/tag/commit to check out (default: main)
 
-    The escript entrypoint is `STS.CLI.main/1` from the simple_tableaux_solver Mix
+    The escript entrypoint is `STS.CLI.main/1` from the hybrid_tableaux_solver Mix
     project; output follows TPTP SZS conventions so it can be collected with
     `AtpBenchmarkRunner.parse_result/4`.
+    This container always runs in symbolic-only mode (no LLM/hybrid) — the
+    default routing when OPENROUTER_API_KEY is not set ensures :symbolic_only.
     For local development, run `apptainer build` with `--build-arg TABLEAUX_REPO=<path>`
     pointing at a checked-out copy of the item #12 project.

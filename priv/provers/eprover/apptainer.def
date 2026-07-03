@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: ubuntu:24.04
+From: buildpack-deps:stable
 
 %labels
     Maintainer AISE Bamberg
@@ -8,21 +8,42 @@ From: ubuntu:24.04
 
 %post
     set -eux
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y --no-install-recommends ca-certificates git build-essential gawk make perl
+    # Proxy for FAU compute node internet access (Fritz, Helma, etc.)
+    export HTTP_PROXY="http://proxy.nhr.fau.de:80"
+    export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
+    export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
+    export http_proxy="$HTTP_PROXY"
+    export https_proxy="$HTTPS_PROXY"
+    export no_proxy="$NO_PROXY"
+
+    # buildpack-deps:stable is Debian-based (glibc) and already has
+    # gcc, g++, make, git, perl, curl, ca-certificates pre-installed.
+    # No package manager needed in %post — avoids setgroups/chown on FAU nodes.
+
     git clone --depth 1 https://github.com/eprover/eprover.git /opt/eprover
     cd /opt/eprover
     ./configure --enable-ho --bindir=/usr/local/bin
     make rebuild
     make install
-    if [ ! -x /usr/local/bin/eprover-ho ] && [ -x /opt/eprover/PROVER/eprover-ho ]; then
+    # With --enable-ho, E builds 'eprover-ho'. Fall back to 'eprover' if HO binary missing.
+    if [ -x /usr/local/bin/eprover-ho ]; then
+      :  # installed by make install
+    elif [ -x /opt/eprover/PROVER/eprover-ho ]; then
       cp /opt/eprover/PROVER/eprover-ho /usr/local/bin/eprover-ho
+    elif [ -x /usr/local/bin/eprover ]; then
+      ln -sf /usr/local/bin/eprover /usr/local/bin/eprover-ho
+    elif [ -x /opt/eprover/PROVER/eprover ]; then
+      cp /opt/eprover/PROVER/eprover /usr/local/bin/eprover
+      ln -sf /usr/local/bin/eprover /usr/local/bin/eprover-ho
     fi
-    eprover --version || true
-    eprover-ho --version || true
-    apt-get clean
-    rm -rf /var/lib/apt/lists/*
+    if [ -x /usr/local/bin/eprover-ho ]; then
+      /usr/local/bin/eprover-ho --version
+    else
+      echo "WARNING: eprover binary not found after build" >&2
+      ls -la /usr/local/bin/ | grep -i epro || true
+      ls -la /opt/eprover/PROVER/ | head -20 || true
+    fi
+    rm -rf /opt/eprover
 
 %runscript
     exec eprover-ho "$@"

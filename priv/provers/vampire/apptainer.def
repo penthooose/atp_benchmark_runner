@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: alpine:latest
+From: buildpack-deps:stable-curl
 
 %labels
     Maintainer AISE Bamberg
@@ -8,35 +8,57 @@ From: alpine:latest
 
 %post
     set -eux
-    # apk does not use setgroups/privilege-dropping like apt-get, so it works
-    # on FAU compute nodes where user namespaces are restricted.
-    apk add --no-cache curl ca-certificates jq unzip gcompat libstdc++
+    # Proxy for FAU compute node internet access (Fritz, Helma, etc.)
+    export HTTP_PROXY="http://proxy.nhr.fau.de:80"
+    export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
+    export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
+    export http_proxy="$HTTP_PROXY"
+    export https_proxy="$HTTPS_PROXY"
+    export no_proxy="$NO_PROXY"
+
+    # buildpack-deps:stable-curl is Debian-based (glibc) with curl, wget,
+    # and ca-certificates pre-installed. No package manager in %post needed
+    # — avoids setgroups/chown issues on FAU compute nodes.
+
+    # Download static jq binary
+    curl -fsSL "https://github.com/jqlang/jq/releases/download/jq-1.7/jq-linux64" -o /usr/local/bin/jq
+    chmod +x /usr/local/bin/jq
+
+    # Download static busybox (for unzip — not in buildpack-deps)
+    curl -fsSL "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox" -o /usr/local/bin/busybox
+    chmod +x /usr/local/bin/busybox
+
     arch="$(uname -m)"
     case "$arch" in
       x86_64|amd64) asset_pattern='Linux-X64' ;;
       aarch64|arm64) asset_pattern='Linux-ARM64' ;;
       *) asset_pattern='Linux' ;;
     esac
-    curl -fsSL https://api.github.com/repos/vprover/vampire/releases/latest -o /tmp/vampire_release.json
+
+    curl -fsSL "https://api.github.com/repos/vprover/vampire/releases/latest" -o /tmp/vampire_release.json
     url="$(jq -r '.assets[].browser_download_url' /tmp/vampire_release.json \
       | grep -Ei "$asset_pattern" | grep -Evi 'sha|sig|asc' | head -1 || true)"
     if [ -z "$url" ]; then
       echo "Could not auto-detect a Vampire release binary." >&2
       exit 1
     fi
-    curl -fL "$url" -o /tmp/vampire.asset
-    unzip -o /tmp/vampire.asset -d /tmp/vampire_extract
+    curl -fSL "$url" -o /tmp/vampire.asset
+    /usr/local/bin/busybox unzip -o /tmp/vampire.asset -d /tmp/vampire_extract
     found="$(find /tmp/vampire_extract -type f -name vampire | head -1)"
-    if [ -n "$found" ]; then
-      install -m 0755 "$found" /usr/local/bin/vampire
-    else
-      # Fallback: first executable file in the zip
-      found="$(find /tmp/vampire_extract -type f -executable | head -1)"
-      [ -n "$found" ]
-      install -m 0755 "$found" /usr/local/bin/vampire
+    if [ -z "$found" ]; then
+      # Fallback: try any regular file
+      for f in /tmp/vampire_extract/*; do
+        if [ -f "$f" ] && [ -x "$f" ]; then
+          found="$f"
+          break
+        fi
+      done
     fi
+    [ -n "$found" ]
+    cp "$found" /usr/local/bin/vampire
+    chmod +x /usr/local/bin/vampire
     /usr/local/bin/vampire --version
     rm -rf /tmp/vampire_release.json /tmp/vampire.asset /tmp/vampire_extract
 
 %runscript
-    exec vampire "$@"
+    exec /usr/local/bin/vampire "$@"

@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: ubuntu:20.04
+From: ocaml/opam:ubuntu-22.04-ocaml-4.12
 
 %labels
     Maintainer AISE Bamberg
@@ -8,23 +8,78 @@ From: ubuntu:20.04
 
 %post
     set -eux
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y --no-install-recommends ca-certificates curl build-essential make ocaml ocaml-findlib camlp5
-    curl -fL http://page.mi.fu-berlin.de/cbenzmueller/leo/leo2_v1.7.0.tgz -o /tmp/leo2.tgz
+    # Proxy for FAU compute node internet access (Fritz, Helma, etc.)
+    export HTTP_PROXY="http://proxy.nhr.fau.de:80"
+    export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
+    export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
+    export http_proxy="$HTTP_PROXY"
+    export https_proxy="$HTTPS_PROXY"
+    export no_proxy="$NO_PROXY"
+
+    # OCI extraction provides OCaml 4.12, opam, gcc, make, curl, git, etc.
+    # conf-m4 needs the m4 system tool. Since apt-get is unavailable on FAU nodes,
+    # compile m4 from source (it's a small, fast build).
+    curl -fsSL "https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.gz" -o /tmp/m4-src.tar.gz 2>/dev/null || true
+    if [ -f /tmp/m4-src.tar.gz ] && [ -s /tmp/m4-src.tar.gz ]; then
+      tar -xzf /tmp/m4-src.tar.gz -C /tmp
+      cd /tmp/m4-1.4.19
+      ./configure --prefix=/usr/local --quiet 2>/dev/null
+      make -j$(nproc) 2>/dev/null
+      make install 2>/dev/null
+      cd /
+      rm -rf /tmp/m4-1.4.19 /tmp/m4-src.tar.gz
+      hash -r
+    fi
+    # conf-pkg-config needs pkg-config; try compiling from source too
+    which pkg-config 2>/dev/null || {
+      curl -fsSL "https://pkgconfig.freedesktop.org/releases/pkg-config-0.29.2.tar.gz" -o /tmp/pkg-config-src.tar.gz 2>/dev/null || true
+      if [ -f /tmp/pkg-config-src.tar.gz ] && [ -s /tmp/pkg-config-src.tar.gz ]; then
+        tar -xzf /tmp/pkg-config-src.tar.gz -C /tmp
+        cd /tmp/pkg-config-0.29.2
+        ./configure --prefix=/usr/local --quiet 2>/dev/null
+        make -j$(nproc) 2>/dev/null
+        make install 2>/dev/null
+        cd /
+        rm -rf /tmp/pkg-config-0.29.2 /tmp/pkg-config-src.tar.gz
+        hash -r
+      fi
+    }
+
+    # Use the image's pre-configured opam root (OCaml 4.12) if available;
+    # otherwise init with the explicit compiler version.
+    if [ -d /home/opam/.opam ]; then
+      export OPAMROOT=/home/opam/.opam
+    else
+      export OPAMROOT=/root/.opam
+      opam init --disable-sandboxing --compiler=ocaml-base-compiler.4.12.1 2>&1
+    fi
+    eval $(opam env)
+
+    # Install ocaml-findlib and camlp5 via opam (not apt-get)
+    opam install -y ocamlfind camlp5
+
+    curl -fSL "http://page.mi.fu-berlin.de/cbenzmueller/leo/leo2_v1.7.0.tgz" -o /tmp/leo2.tgz
     mkdir -p /opt/leo2
-    tar -xzf /tmp/leo2.tgz -C /opt/leo2 --strip-components=1
-    cd /opt/leo2
+    # Debug: show tarball structure
+    echo "=== LEO-II tarball contents (first 20) ==="
+    tar -tzf /tmp/leo2.tgz | head -20
+    # Extract with --strip-components=1; if the directory is empty, try without strip
+    tar -xzf /tmp/leo2.tgz -C /opt/leo2 --strip-components=1 2>/dev/null || \
+      tar -xzf /tmp/leo2.tgz -C /opt/leo2
+    echo "=== Extracted files ==="
+    ls -la /opt/leo2/
+    # Makefile is in src/, not at top level
+    cd /opt/leo2/src
     make || true
     candidate="$(find /opt/leo2 -type f \( -name 'leo' -o -name 'leo.opt' -o -name 'leo.byte' \) | head -1 || true)"
     if [ -z "$candidate" ]; then
-      echo "LEO-II legacy build did not produce a binary. This definition may need project-specific patching." >&2
+      echo "LEO-II legacy build did not produce a binary." >&2
       exit 1
     fi
     install -m 0755 "$candidate" /usr/local/bin/leo
-    leo -h >/dev/null || true
-    apt-get clean
-    rm -rf /var/lib/apt/lists/* /tmp/*
+    /usr/local/bin/leo -h >/dev/null || true
+    # Targeted cleanup only — avoid rm -rf /tmp/* which can hit mounted directories
+    rm -rf /tmp/leo2.tgz 2>/dev/null || true
 
 %runscript
     exec leo "$@"

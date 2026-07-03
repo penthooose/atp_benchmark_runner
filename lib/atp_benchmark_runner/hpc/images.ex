@@ -168,7 +168,21 @@ defmodule AtpBenchmarkRunner.HPC.Images do
   def build_all!(%HpcConnect.Session{} = session, provers, opts \\ []) when is_list(provers) do
     maybe_install_build_tools!(session, opts)
     build_opts = Keyword.put(opts, :install_scripts, false)
-    Map.new(provers, fn prover -> {prover.name, build!(session, prover, build_opts)} end)
+
+    Map.new(provers, fn prover ->
+      {prover.name,
+       try do
+         build!(session, prover, build_opts)
+       rescue
+         e ->
+           IO.puts(
+             "[WARN] Build failed for prover #{prover.name}: #{Exception.message(e)}" <>
+               "\n       Continuing with remaining provers..."
+           )
+
+           {:error, Exception.message(e)}
+       end}
+    end)
   end
 
   @doc """

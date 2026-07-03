@@ -8,17 +8,45 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
 
 %post
     set -eux
-    sudo apt-get update
-    sudo apt-get install -y --no-install-recommends ca-certificates git libgmp-dev m4 pkg-config python3
-    opam update
-    opam install -y zipperposition
-    sudo ln -sf /home/opam/.opam/4.14/bin/zipperposition /usr/local/bin/zipperposition
-    zipperposition --help >/dev/null || true
-    sudo apt-get clean
-    sudo rm -rf /var/lib/apt/lists/*
+    # Proxy for FAU compute node internet access (Fritz, Helma, etc.)
+    export HTTP_PROXY="http://proxy.nhr.fau.de:80"
+    export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
+    export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
+    export http_proxy="$HTTP_PROXY"
+    export https_proxy="$HTTPS_PROXY"
+    export no_proxy="$NO_PROXY"
+
+    # OCI extraction already provides OCaml 4.12, opam, gcc, make, git, etc.
+    # No apt-get needed in %post — avoids setgroups/chown on FAU nodes.
+
+    # Use the image's pre-configured opam root (OCaml 4.12) if available;
+    # otherwise init with the explicit compiler version to avoid downloading
+    # the latest OCaml (5.x) which breaks zipperposition's oseq dependency.
+    if [ -d /home/opam/.opam ]; then
+      export OPAMROOT=/home/opam/.opam
+    else
+      export OPAMROOT=/root/.opam
+      opam init --disable-sandboxing --compiler=ocaml-base-compiler.4.12.1 2>&1
+    fi
+    eval $(opam env)
+    opam update 2>&1 | tail -3
+    # Try latest, fall back to version 2.0 if latest isn't available for this OCaml
+    opam install -y zipperposition 2>&1 || \
+      opam install -y zipperposition.2.0 2>&1 || \
+      echo "WARNING: Could not install zipperposition via opam" >&2
+  # Search for the binary (check both possible opam roots)
+    for dir in /home/opam/.opam /root/.opam; do
+      found="$(find "$dir" -maxdepth 4 -type f -name zipperposition 2>/dev/null | head -1)"
+    if [ -n "$found" ]; then
+      ln -sf "$found" /usr/local/bin/zipperposition
+    else
+      echo "WARNING: zipperposition binary not found after opam install" >&2
+    fi
+    /usr/local/bin/zipperposition --help >/dev/null 2>&1 || true
 
 %environment
-    export PATH=/usr/local/bin:/home/opam/.opam/4.14/bin:$PATH
+    export OPAMROOT=/home/opam/.opam
+    export PATH=/usr/local/bin:/home/opam/.opam/4.12/bin:$PATH
 
 %runscript
     exec zipperposition "$@"

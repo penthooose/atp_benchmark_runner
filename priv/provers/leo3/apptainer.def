@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: eclipse-temurin:21-jre-jammy
+From: buildpack-deps:stable-curl
 
 %labels
     Maintainer AISE Bamberg
@@ -8,27 +8,51 @@ From: eclipse-temurin:21-jre-jammy
 
 %post
     set -eux
-    apt-get update
-    apt-get install -y --no-install-recommends ca-certificates curl jq unzip
-    curl -fsSL https://api.github.com/repos/leoprover/Leo-III/releases/latest -o /tmp/leo3_release.json
+    # Proxy for FAU compute node internet access (Fritz, Helma, etc.)
+    export HTTP_PROXY="http://proxy.nhr.fau.de:80"
+    export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
+    export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
+    export http_proxy="$HTTP_PROXY"
+    export https_proxy="$HTTPS_PROXY"
+    export no_proxy="$NO_PROXY"
+
+    # buildpack-deps:stable-curl has glibc, curl, ca-certificates.
+    # No package manager needed in %post — avoids setgroups/chown on FAU nodes.
+
+    # Download static jq binary
+    curl -fsSL "https://github.com/jqlang/jq/releases/download/jq-1.7/jq-linux64" -o /usr/local/bin/jq
+    chmod +x /usr/local/bin/jq
+
+    # Download static busybox (for unzip)
+    curl -fsSL "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox" -o /usr/local/bin/busybox
+    chmod +x /usr/local/bin/busybox
+
+    # Download Adoptium JRE (no apt-get needed)
+    curl -fsSL "https://api.adoptium.net/v3/binary/version/jdk-21.0.1+12/linux/x64/jre/hotspot/normal/eclipse" -o /tmp/jre.tar.gz
+    mkdir -p /opt/java
+    tar -xzf /tmp/jre.tar.gz -C /opt/java --strip-components=1
+    export PATH="/opt/java/bin:$PATH"
+
+    # Download and install Leo-III
+    curl -fsSL "https://api.github.com/repos/leoprover/Leo-III/releases/latest" -o /tmp/leo3_release.json
     url="$(jq -r '.assets[].browser_download_url' /tmp/leo3_release.json | grep -Ei 'leo.*(jar|zip)$' | head -1 || true)"
     if [ -z "$url" ]; then
-      echo "Could not auto-detect a Leo-III release jar/zip. Pin an asset URL in this definition." >&2
+      echo "Could not auto-detect a Leo-III release." >&2
       exit 1
     fi
-    curl -fL "$url" -o /opt/leo3.asset
+    curl -fSL "$url" -o /opt/leo3.asset
     mkdir -p /opt/leo3
     case "$url" in
-      *.zip) unzip /opt/leo3.asset -d /opt/leo3 ;;
+      *.zip) /usr/local/bin/busybox unzip /opt/leo3.asset -d /opt/leo3 ;;
       *.jar) cp /opt/leo3.asset /opt/leo3/leo3.jar ;;
       *) cp /opt/leo3.asset /opt/leo3/leo3.jar ;;
     esac
     jar="$(find /opt/leo3 -type f -name '*.jar' | head -1)"
-    printf '#!/bin/sh\nexec java -jar %s "$@"\n' "$jar" > /usr/local/bin/leo3
+    printf '#!/bin/sh\nexport PATH=/opt/java/bin:$PATH\nexec java -jar %s "$@"\n' "$jar" > /usr/local/bin/leo3
     chmod +x /usr/local/bin/leo3
-    leo3 --help >/dev/null || true
-    apt-get clean
-    rm -rf /var/lib/apt/lists/* /tmp/*
+    /opt/java/bin/java -jar "$jar" --help >/dev/null || true
+    # Targeted cleanup — avoid /tmp/* which hits mounted proc/sys/dev in Apptainer builds
+    rm -f /tmp/jre.tar.gz /tmp/leo3_release.json || true
 
 %runscript
-    exec leo3 "$@"
+    exec /usr/local/bin/leo3 "$@"
