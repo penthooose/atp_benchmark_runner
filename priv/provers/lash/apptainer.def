@@ -22,13 +22,55 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     # OCI extraction provides OCaml 4.12, opam, gcc, make, curl, git.
     # No apt-get needed in %post — avoids setgroups/chown on FAU nodes.
 
+    # zlib is needed by lash (minisat dependency) — compile from source
+    cd /tmp && \
+    curl -fSL "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz" -o zlib.tar.gz && \
+    tar -xzf zlib.tar.gz && \
+    cd zlib-1.3.1 && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && \
+    make install && \
+    hash -r && \
+    cd / && rm -rf /tmp/zlib-1.3.1 /tmp/zlib.tar.gz
+
     mkdir -p /opt/lash
     LASH_SRC="${LASH_URL:-http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz}"
     curl -fSL "$LASH_SRC" -o /tmp/lash.tar.gz
-    tar -xzf /tmp/lash.tar.gz -C /opt/lash --strip-components=1
-    # After strip: Makefile + configure at /opt/lash/ top level
-    cd /opt/lash
+    tar --no-same-owner -xzf /tmp/lash.tar.gz -C /opt/lash --strip-components=1
+    # After strip with --strip-components=1: tarball structure is
+    # lash-1.14rc1/source/configure → /opt/lash/source/configure
+
+    # Set up opam environment so ocamlyacc and other OCaml tools are on PATH.
+    # During build (%post), /home/opam/.opam exists; fall back to fresh init.
+    if [ -d /home/opam/.opam ]; then
+      export OPAMROOT=/home/opam/.opam
+      # Disable opam sandboxing so sub-process builds inherit our PATH,
+      # C_INCLUDE_PATH, etc. without bubblewrap restrictions.
+      rm -f /usr/share/opam/sandbox.sh 2>/dev/null || true
+    else
+      export OPAMROOT=/tmp/opam-root
+      opam init --disable-sandboxing --compiler=ocaml-base-compiler.4.12.1 --yes 2>&1
+    fi
+    eval $(opam env)
+
+    cd /opt/lash/source
+    # C stubs in lash include OCaml headers (caml/mlvalues.h etc.)
+    export C_INCLUDE_PATH="/home/opam/.opam/4.12/lib/ocaml${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+    export CPLUS_INCLUDE_PATH="/home/opam/.opam/4.12/lib/ocaml${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+    # OCaml 4.12 renamed caml_process_pending_signals →
+    # caml_process_pending_signals_exn. Patch AFTER configure (it may
+    # generate or relocate Solver.cc), but BEFORE make.
     ./configure
+    SOLVER_CC="$(find /opt/lash -name 'Solver.cc' -type f 2>/dev/null | head -1)"
+    if [ -n "$SOLVER_CC" ]; then
+      sed -i 's/caml_process_pending_signals\b/caml_process_pending_signals_exn/g' "$SOLVER_CC"
+      echo "PATCHED: $SOLVER_CC"
+    fi
+    # Ensure OCaml runtime libs are linked after all C++ objects.
+    OCAML_LIBDIR="$(ocamlc -where 2>/dev/null || echo /home/opam/.opam/4.12/lib/ocaml)"
+    if [ -f "$OCAML_LIBDIR/libasmrun.a" ]; then
+      sed -i "s|-o lash|-o lash \"$OCAML_LIBDIR/libasmrun.a\"|" Makefile
+    fi
     make -j$(nproc)
     # Binary is produced in source/src/; find it anywhere under /opt/lash
     candidate="$(find /opt/lash -maxdepth 4 -type f \( -name 'lash' -o -name 'lash.opt' -o -name 'lash.byte' \) | head -1 || true)"
@@ -48,6 +90,6 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
       --build-arg LASH_URL=<url>   Lash source tarball (default: upstream)
 
     Source: http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz (confirmed working)
-    Tarball structure: lash-1.14rc1/source/configure → standard ./configure && make build.
+    Tarball structure: lash-1.14rc1/{b.p,d.p,e.p,c.p,source/}. `cd source/ && ./configure && make`.
     The binary is installed to /usr/local/bin/lash.
     Requires OCaml, gcc, make, git (provided by ocaml/opam:ubuntu-22.04-ocaml-4.12).

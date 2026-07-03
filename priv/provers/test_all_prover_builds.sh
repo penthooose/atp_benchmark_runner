@@ -1,6 +1,9 @@
 #!/bin/bash -l
 # test_all_prover_builds.sh
-
+#
+# Tests remaining ATP prover builds that still need debugging.
+# Run on a FAU cluster login node (Alex, Fritz) with apptainer available.
+# Remove the --debug flag once a prover passes.
 
 set -Eeuo pipefail
 
@@ -12,142 +15,164 @@ export https_proxy="$PROXY"
 export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
 export no_proxy="$NO_PROXY"
 
-PASS=0; FAIL=0
-pass() { PASS=$((PASS+1)); echo -e "  \e[32m✓ PASS\e[0m $1"; }
-fail() { FAIL=$((FAIL+1)); echo -e "  \e[31m✗ FAIL\e[0m $1"; }
 sep() { echo ""; echo "--- $1 ---"; }
+info() { echo "  [INFO] $1"; }
 
 echo "=============================================="
-echo " All Prover Apptainer Build — Interactive Test"
+echo " ATP Prover Apptainer Build Tests"
+echo " Tests LEO-II and Lash build pipeline steps."
+echo " Date: $(date)"
 echo "=============================================="
 
 # ---- Prerequisite: apptainer available ----
 sep "Prerequisite: apptainer"
 if command -v apptainer &>/dev/null; then
-  pass "apptainer $(apptainer --version 2>&1 | head -1)"
+  echo "  ✓ apptainer $(apptainer --version 2>&1 | head -1)"
 else
-  fail "apptainer not found"
+  echo "  ✗ apptainer not found — are you on a cluster node?"
   exit 1
 fi
 
-# ============================================================
-# 1. LEO-II (ocaml/opam + opam install ocamlfind camlp5 + make)
-# ============================================================
-sep "1. LEO-II — ocaml/opam opam deps + source build"
+# Test that docker:// pulls work (tested on Alex)
+info "Testing docker pull..."
+if apptainer exec docker://buildpack-deps:stable-curl sh -c 'echo ok' 2>/dev/null; then
+  echo "  ✓ docker://buildpack-deps:stable-curl pull+exec"
+else
+  echo "  ✗ docker pull failed (check proxy)"
+fi
 
-echo "  Testing opam init + ocamlfind/camlp5 install..."
-apptainer exec --fakeroot docker://ocaml/opam:ubuntu-22.04-ocaml-4.12 sh -c '
+# ============================================================
+# 1. LEO-II — pkgconf + opam init + deps + source build
+# ============================================================
+# NOTE: Single apptainer exec per prover (--writable-tmpfs is per-call).
+#       In %post, /home/opam/.opam exists; during exec we must init opam manually.
+
+sep "1. LEO-II — pkgconf + opam + source build (single exec)"
+
+apptainer exec --writable-tmpfs docker://ocaml/opam:ubuntu-22.04-ocaml-4.12 sh -c '
+  set -ux
+  export HTTP_PROXY="http://proxy.nhr.fau.de:80"
   export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
-  # Use a writable temp dir and pin OCaml 4.12
+
+  # Step 1a: compile pkgconf from source
+  # Fix 1: reset PATH
+  export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  hash -r
+
+  cd /tmp && \
+  curl -fSL "https://distfiles.ariadne.space/pkgconf/pkgconf-1.9.5.tar.gz" -o pkgconf.tar.gz && \
+  tar --no-same-owner -xzf pkgconf.tar.gz && \
+  cd pkgconf-1.9.5 && \
+  ./configure --prefix=/usr/local && \
+  make -j$(nproc) && \
+  make install
+  # pkgconf installs as /usr/local/bin/pkgconf, NOT pkg-config.
+  # Create the symlink that opam's conf-pkg-config expects.
+  # In rootless apptainer exec, /usr/local/bin may not be writable
+  # (Permission denied). Fall back to /tmp with PATH override.
+  if ln -sf /usr/local/bin/pkgconf /usr/local/bin/pkg-config 2>/dev/null; then
+    echo "SYMLINK: /usr/local/bin/pkg-config -> pkgconf"
+  else
+    ln -sf /usr/local/bin/pkgconf /tmp/pkg-config 2>/dev/null || true
+    export PATH="/tmp:$PATH"
+    echo "SYMLINK: /tmp/pkg-config -> pkgconf (rootless fallback)"
+  fi
+  export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
+  export PATH="/usr/local/bin:$PATH"
+  hash -r
+  ldconfig -n /usr/local/lib 2>/dev/null || true
+  echo "PKGCONF_VERSION: $(pkg-config --version 2>&1)"
+  echo "PKG_CONFIG_WHICH: $(command -v pkg-config 2>&1)"
+  echo "PKGCONF_WHICH: $(command -v pkgconf 2>&1)"
+  # Extra symlink in /usr/bin as fallback
+  ln -sf /usr/local/bin/pkgconf /usr/bin/pkg-config 2>/dev/null || true
+  # Locate opam binary (not on default PATH after reset)
+  OPAM_BIN="$(command -v opam 2>/dev/null || find /home/opam -name opam -type f 2>/dev/null | head -1)"
+  if [ -n "$OPAM_BIN" ]; then
+    export PATH="$(dirname "$OPAM_BIN"):$PATH"
+    echo "OPAM_PATH: $(command -v opam)"
+  fi
+
+  # Step 1b: init opam and install deps
   export OPAMROOT=/tmp/opam-root
   rm -rf "$OPAMROOT"
-  opam init --disable-sandboxing --compiler=ocaml-base-compiler.4.12.1 2>&1 | tail -5
+  opam init --disable-sandboxing --compiler=ocaml-base-compiler.4.12.1 --yes 2>&1 | tail -3
   eval $(opam env)
+  echo "OPAM_VERSION: $(opam --version 2>&1)"
+  # Fix 3: opam env vars + force PATH
+  export OPAMENV_IGNORE=false
+  export OPAMROOTISOK=1
+  export OPAMYES=1
+  export PATH="/usr/local/bin:$PATH"
+  hash -r
+  echo "Pre-install pkg-config check: $(command -v pkg-config 2>/dev/null || echo MISSING)"
+  opam install -y ocamlfind camlp5 camlp4 2>&1 | tail -10
+  echo "OPAM_EXIT: $?"
 
-  # Check for system tools
-  for tool in m4 pkg-config gcc make curl tar; do
-    if which $tool 2>/dev/null; then echo "  ✓ $tool found"; else echo "  ✗ $tool MISSING"; fi
-  done
-
-  opam install -y ocamlfind camlp5 2>&1 | tail -20
-  echo "opam install ocamlfind camlp5 exit: $?"
-  rm -rf "$OPAMROOT"
-' 2>/dev/null && pass "LEO-II deps install OK" || fail "LEO-II deps install failed"
-
-echo "  Testing LEO-II source download + make..."
-apptainer exec --fakeroot docker://ocaml/opam:ubuntu-22.04-ocaml-4.12 sh -c '
-  export HTTP_PROXY="http://proxy.nhr.fau.de:80"
-  export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
-  # Use the image'\''s pre-configured opam root
-  export OPAMROOT=/home/opam/.opam
-  eval $(opam env)
-  opam install -y ocamlfind camlp5 2>/dev/null
-
+  # Step 1c: download and build LEO-II
   curl -fSL "http://page.mi.fu-berlin.de/cbenzmueller/leo/leo2_v1.7.0.tgz" -o /tmp/leo2.tgz
-  echo "download exit: $?"
-  echo "=== Tarball size ==="
-  ls -la /tmp/leo2.tgz
-  echo "=== Tarball contents (first 30) ==="
-  tar -tzf /tmp/leo2.tgz 2>&1 | head -30
-  rm -rf /tmp/leo2 && mkdir -p /tmp/leo2
-  tar -xzf /tmp/leo2.tgz -C /tmp/leo2 --strip-components=1 2>&1
-  echo "=== Extracted files (tmp/leo2/) ==="
-  ls -la /tmp/leo2/ 2>/dev/null
-  # Makefile is in src/, not at top level
-  cd /tmp/leo2/src 2>/dev/null
-  make 2>&1 | tail -20
-  echo "make exit: $?"
-  find /tmp/leo2 -type f \( -name "leo" -o -name "leo.opt" \) 2>/dev/null
-' 2>/dev/null && pass "LEO-II build OK" || fail "LEO-II build failed"
+  mkdir -p /opt/leo2
+  tar -xzf /tmp/leo2.tgz -C /opt/leo2 --strip-components=1
+  echo "EXTRACTED: $(ls /opt/leo2/ 2>/dev/null)"
+  cd /opt/leo2/src
+  make 2>&1 | tail -15
+  candidate=$(find /opt/leo2 -type f \( -name "leo" -o -name "leo.opt" -o -name "leo.byte" \) 2>/dev/null | head -1)
+  if [ -n "$candidate" ]; then
+    echo "BINARY_FOUND: $candidate"
+  else
+    echo "NO_BINARY"
+    echo "FILES_IN_SRC: $(ls /opt/leo2/src/ 2>/dev/null | head -20)"
+  fi
+' 2>&1 | grep -E "(PKGCONF_VERSION|OPAM_VERSION|OPAM_EXIT|BINARY_FOUND|NO_BINARY|error|Error|FATAL)" || true
 
 # ============================================================
-# 2. LASH — download + build (URL confirmed working)
+# 2. LASH — full build with opam init + ocamlyacc
 # ============================================================
-sep "2. Lash — download + build test"
+sep "2. Lash — full build with opam init (single exec)"
 
-echo "  Testing Lash download + extraction..."
-apptainer exec docker://ocaml/opam:ubuntu-22.04-ocaml-4.12 sh -c '
+apptainer exec --writable-tmpfs docker://ocaml/opam:ubuntu-22.04-ocaml-4.12 sh -c '
+  set -ux
   export HTTP_PROXY="http://proxy.nhr.fau.de:80"
   export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
+
+  # Init opam for ocamlyacc
+  export OPAMROOT=/tmp/opam-root
+  rm -rf "$OPAMROOT"
+  opam init --disable-sandboxing --compiler=ocaml-base-compiler.4.12.1 --yes 2>&1 | tail -3
+  eval $(opam env)
+  echo "ocamlyacc: $(which ocamlyacc 2>/dev/null || echo NOT_FOUND)"
+
+  # Download and build Lash
   curl -fSL "http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz" -o /tmp/lash.tar.gz
-  echo "download exit: $?"
-  ls -la /tmp/lash.tar.gz
-  echo "=== Tarball contents (first 15) ==="
-  tar -tzf /tmp/lash.tar.gz 2>&1 | head -15
-  rm -rf /tmp/lash && mkdir -p /tmp/lash
-  tar -xzf /tmp/lash.tar.gz -C /tmp/lash --strip-components=1
-  echo "=== Extracted files ==="
-  ls /tmp/lash/ 2>/dev/null
-  ls /tmp/lash/source/ 2>/dev/null | head -5
-  echo "Tarball download and extraction OK"
-  rm -rf /tmp/lash.tar.gz /tmp/lash
-' 2>/dev/null && pass "Lash download+extract OK" || fail "Lash download+extract failed"
+  mkdir -p /opt/lash
+  tar --no-same-owner -xzf /tmp/lash.tar.gz -C /opt/lash --strip-components=1
+  echo "EXTRACTED: $(ls /opt/lash/ 2>/dev/null)"
+  echo "SOURCE_DIR: $(ls /opt/lash/source/ 2>/dev/null | head -5)"
 
-# ============================================================
-# 3. CVC5 — verify --lang=tptp works with TPTP problems
-# ============================================================
-sep "3. CVC5 — verify --lang=tptp works with TPTP problems"
+  cd /opt/lash/source
+  ./configure 2>&1 | tail -5
+  SOLVER_CC="$(find /opt/lash -name 'Solver.cc' -type f 2>/dev/null | head -1)"
+  if [ -n "$SOLVER_CC" ]; then
+    sed -i 's/caml_process_pending_signals\b/caml_process_pending_signals_exn/g' "$SOLVER_CC"
+    echo "PATCHED: $SOLVER_CC"
+  fi
+  make -j$(nproc) 2>&1 | tail -15
 
-echo "  Checking if cvc5.sif exists..."
-CVC5_SIF="$HOME/.cache/hpc_connect/singularity_images/cvc5.sif"
-if [ -f "$CVC5_SIF" ]; then
-  pass "cvc5.sif exists"
-
-  echo "  Testing cvc5 with --lang tptp on a TPTP file..."
-  # Create a minimal TPTP problem
-  mkdir -p /tmp/tptp_test
-  cat > /tmp/tptp_test/test.p <<'EOF'
-% SZS status Theorem for test
-fof(ax1, axiom, p | ~p).
-fof(conj, conjecture, $true).
-EOF
-  apptainer exec "$CVC5_SIF" cvc5 --lang=tptp --tlimit=5000 /tmp/tptp_test/test.p 2>&1 | head -10
-  echo "cvc5 TPTP mode exit: $?"
-  rm -rf /tmp/tptp_test
-else
-  fail "cvc5.sif not found at $CVC5_SIF (build it first)"
-fi
-
-# ============================================================
-# 4. E-PROVER — verify binary
-# ============================================================
-sep "4. E-Prover — verify installed binary"
-
-EPROVER_SIF="$HOME/.cache/hpc_connect/singularity_images/eprover.sif"
-if [ -f "$EPROVER_SIF" ]; then
-  echo "  Testing eprover binary..."
-  apptainer exec "$EPROVER_SIF" eprover-ho --version 2>&1 | head -3
-  echo "eprover exit: $?"
-  apptainer exec "$EPROVER_SIF" eprover --version 2>&1 | head -3 || echo "eprover (non-HO) not found"
-  pass "E-Prover binary works"
-else
-  fail "eprover.sif not found"
-fi
+  candidate=$(find /opt/lash -maxdepth 4 -type f \( -name "lash" -o -name "lash.opt" -o -name "lash.byte" \) 2>/dev/null | head -1)
+  if [ -n "$candidate" ]; then
+    echo "BINARY_FOUND: $candidate"
+  else
+    echo "NO_BINARY"
+    echo "BUILD_LOG: $(find /opt/lash -name "*.log" -o -name "*.status" 2>/dev/null | head -5)"
+  fi
+' 2>&1 | grep -E "(BINARY_FOUND|NO_BINARY|ocamlyacc|error|Error|FATAL)" || true
 
 # ============================================================
 # Summary
 # ============================================================
 echo ""
 echo "=============================================="
-echo " Results: $PASS passed, $FAIL failed"
+echo " Tests complete."
+echo " NOTE: apptainer exec env differs from apptainer build."
+echo " For real validation, just run: apptainer build ..."
 echo "=============================================="

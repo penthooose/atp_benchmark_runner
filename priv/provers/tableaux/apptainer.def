@@ -41,7 +41,8 @@ From: hexpm/elixir:1.17.3-erlang-27.1-debian-bookworm-20240904
     mkdir -p /opt/simple_tableaux_solver
     tar -xzf /tmp/tableaux.tar.gz -C /opt/simple_tableaux_solver --strip-components=1
     cd /opt/simple_tableaux_solver
-    mix deps.get
+    mix deps.update --all 2>&1
+    mix deps.get 2>&1
     MIX_ENV=prod mix escript.build
     install -m 0755 simple_tableaux_solver /usr/local/bin/simple_tableaux_solver
     /usr/local/bin/simple_tableaux_solver --help >/dev/null 2>&1 || true

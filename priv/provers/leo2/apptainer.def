@@ -16,12 +16,18 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     export https_proxy="$HTTPS_PROXY"
     export no_proxy="$NO_PROXY"
 
+    # Fix 1: Reset PATH to a safe full value at the very top.
+    # Apptainer/Singularity can strip PATH between build stages,
+    # and opam sub-processes inherit a restricted PATH.
+    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    hash -r
+
     # OCI extraction provides OCaml 4.12, opam, gcc, make, curl, git, etc.
     # conf-m4 needs the m4 system tool. Since apt-get is unavailable on FAU nodes,
     # compile m4 from source (it's a small, fast build).
     curl -fsSL "https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.gz" -o /tmp/m4-src.tar.gz 2>/dev/null || true
     if [ -f /tmp/m4-src.tar.gz ] && [ -s /tmp/m4-src.tar.gz ]; then
-      tar -xzf /tmp/m4-src.tar.gz -C /tmp
+      tar --no-same-owner -xzf /tmp/m4-src.tar.gz -C /tmp
       cd /tmp/m4-1.4.19
       ./configure --prefix=/usr/local --quiet 2>/dev/null
       make -j$(nproc) 2>/dev/null
@@ -30,33 +36,101 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
       rm -rf /tmp/m4-1.4.19 /tmp/m4-src.tar.gz
       hash -r
     fi
-    # conf-pkg-config needs pkg-config; try compiling from source too
-    which pkg-config 2>/dev/null || {
-      curl -fsSL "https://pkgconfig.freedesktop.org/releases/pkg-config-0.29.2.tar.gz" -o /tmp/pkg-config-src.tar.gz 2>/dev/null || true
-      if [ -f /tmp/pkg-config-src.tar.gz ] && [ -s /tmp/pkg-config-src.tar.gz ]; then
-        tar -xzf /tmp/pkg-config-src.tar.gz -C /tmp
-        cd /tmp/pkg-config-0.29.2
-        ./configure --prefix=/usr/local --quiet 2>/dev/null
-        make -j$(nproc) 2>/dev/null
-        make install 2>/dev/null
-        cd /
-        rm -rf /tmp/pkg-config-0.29.2 /tmp/pkg-config-src.tar.gz
-        hash -r
-      fi
-    }
+    # conf-pkg-config and conf-perl are opam system-dep guards. apt-get
+    # fails on FAU login nodes (setgroups/setegid/seteuid blocked in the
+    # user namespace), so skip depexts — the actual OCaml packages build
+    # fine without these system checks.
+    # Install pkgconf from source — hard dependency for opam's conf-pkg-config.
+    # Use ariadne.space distfiles (not GitHub archive) for reliable extraction
+    # with plain directory name (pkgconf-1.9.5/ instead of pkgconf-pkgconf-...).
+    # NOTE: do NOT put comments between &&-chained lines — they break the chain.
+    cd /tmp && \
+    curl -fSL "https://distfiles.ariadne.space/pkgconf/pkgconf-1.9.5.tar.gz" -o pkgconf.tar.gz && \
+    tar --no-same-owner -xzf pkgconf.tar.gz && \
+    cd pkgconf-1.9.5 && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && \
+    make install && \
+    ln -sf /usr/local/bin/pkgconf /usr/local/bin/pkg-config && \
+    export PATH="/usr/local/bin:$PATH" && \
+    export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}" && \
+    hash -r && \
+    ldconfig -n /usr/local/lib 2>/dev/null || true && \
+    pkg-config --version
+
+    # Fix 2: verify pkg-config is visible right after install
+    PKG_PATH="$(command -v pkg-config 2>/dev/null || echo MISSING)"
+    echo "pkg-config binary at: $PKG_PATH"
+    if [ "$PKG_PATH" = "MISSING" ]; then
+      echo "FATAL: pkg-config not found after pkgconf install" >&2
+      ls -la /usr/local/bin/pkgconf /usr/local/bin/pkg-config 2>&1 || true
+      exit 1
+    fi
+
+    # Fix 4 (most reliable): extra symlink in /usr/bin as fallback
+    # so opam sub-processes find pkg-config regardless of PATH.
+    ln -sf /usr/local/bin/pkgconf /usr/bin/pkg-config 2>/dev/null || true
+    ls -la /usr/bin/pkg-config 2>/dev/null && /usr/bin/pkg-config --version || true
+
+    cd / && rm -rf /tmp/pkgconf-1.9.5 /tmp/pkgconf.tar.gz
+
+    # camlp5 requires pcre2 which requires conf-libpcre2-8 which checks for
+    # libpcre2-8.pc via pkg-config. Compile PCRE2 from source since apt-get
+    # is unavailable on FAU nodes.
+    cd /tmp && \
+    curl -fSL "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.42/pcre2-10.42.tar.gz" -o pcre2.tar.gz && \
+    tar --no-same-owner -xzf pcre2.tar.gz && \
+    cd pcre2-10.42 && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && \
+    make install && \
+    export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}" && \
+    ldconfig -n /usr/local/lib 2>/dev/null || true && \
+    pkg-config --exists libpcre2-8 && \
+    echo "PCRE2 check: $(pkg-config --modversion libpcre2-8)"
+
+    cd / && rm -rf /tmp/pcre2-10.42 /tmp/pcre2.tar.gz
+
+    # MiniSat (bundled with LEO-II) requires zlib.h. Compile zlib from source
+    # since apt-get is unavailable on FAU nodes.
+    cd /tmp && \
+    curl -fSL "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz" -o zlib.tar.gz && \
+    tar --no-same-owner -xzf zlib.tar.gz && \
+    cd zlib-1.3.1 && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && \
+    make install && \
+    hash -r && \
+    cd / && rm -rf /tmp/zlib-1.3.1 /tmp/zlib.tar.gz
 
     # Use the image's pre-configured opam root (OCaml 4.12) if available;
     # otherwise init with the explicit compiler version.
     if [ -d /home/opam/.opam ]; then
       export OPAMROOT=/home/opam/.opam
+      # Disable opam sandboxing (bubblewrap) so conf-pkg-config sub-process
+      # inherits PATH with our source-built pkgconf pkg-config.
+      rm -f /usr/share/opam/sandbox.sh 2>/dev/null || true
     else
       export OPAMROOT=/root/.opam
       opam init --disable-sandboxing --compiler=ocaml-base-compiler.4.12.1 2>&1
     fi
     eval $(opam env)
 
-    # Install ocaml-findlib and camlp5 via opam (not apt-get)
-    opam install -y ocamlfind camlp5
+    # Fix 3: force opam env vars so sub-process builds inherit PATH
+    export OPAMENV_IGNORE=false
+    export OPAMROOTISOK=1
+    export OPAMYES=1
+    export PATH="/usr/local/bin:$PATH"
+    export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+    hash -r
+
+    # Final check before opam install: confirm pkg-config is findable
+    echo "Pre-opam pkg-config check: $(command -v pkg-config 2>/dev/null || echo MISSING)"
+
+    # Install ocaml-findlib and camlp5 via opam (not apt-get).
+    # LEO-II's Makefile also requires camlp4 for its Camlp4MacroParser
+    # preprocessor (camlp4o.opt).
+    opam install -y ocamlfind camlp5 camlp4
 
     curl -fSL "http://page.mi.fu-berlin.de/cbenzmueller/leo/leo2_v1.7.0.tgz" -o /tmp/leo2.tgz
     mkdir -p /opt/leo2
@@ -64,12 +138,20 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     echo "=== LEO-II tarball contents (first 20) ==="
     tar -tzf /tmp/leo2.tgz | head -20
     # Extract with --strip-components=1; if the directory is empty, try without strip
-    tar -xzf /tmp/leo2.tgz -C /opt/leo2 --strip-components=1 2>/dev/null || \
-      tar -xzf /tmp/leo2.tgz -C /opt/leo2
+    tar --no-same-owner -xzf /tmp/leo2.tgz -C /opt/leo2 --strip-components=1 2>/dev/null || \
+      tar --no-same-owner -xzf /tmp/leo2.tgz -C /opt/leo2
     echo "=== Extracted files ==="
     ls -la /opt/leo2/
     # Makefile is in src/, not at top level
     cd /opt/leo2/src
+    # OCaml 4.12 file reads return bytes, not string. Fix ALL read_file calls
+    # at the definition point so downstream uses are already string.
+    sed -i 's/read_file file_out in/Bytes.to_string (read_file file_out) in/g' calculus/automation.ml
+    # GCC compatibility: old MiniSat code uses friend declarations with default
+    # arguments that newer GCC rejects. Add -fpermissive to both the MiniSat
+    # library build and the Ointerface.cc compilation.
+    sed -i 's|cd ../lib/minisat;|cd ../lib/minisat; export CFLAGS="-Wall -Wno-parentheses -fPIC -fpermissive";|' Makefile
+    sed -i 's|\$(CXX) -c -fPIC -Wall|\$(CXX) -c -fPIC -Wall -fpermissive|' Makefile
     make || true
     candidate="$(find /opt/leo2 -type f \( -name 'leo' -o -name 'leo.opt' -o -name 'leo.byte' \) | head -1 || true)"
     if [ -z "$candidate" ]; then

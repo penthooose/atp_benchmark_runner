@@ -8,7 +8,6 @@ From: alpine:latest
 
 %post
     set -eux
-    # Proxy for FAU compute node internet access (Fritz, Helma, etc.)
     export HTTP_PROXY="http://proxy.nhr.fau.de:80"
     export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
     export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
@@ -16,48 +15,23 @@ From: alpine:latest
     export https_proxy="$HTTPS_PROXY"
     export no_proxy="$NO_PROXY"
 
-    # apk does not use setgroups/privilege-dropping like apt-get, so it works
-    # on FAU compute nodes where user namespaces are restricted.
-    apk add --no-cache curl ca-certificates jq unzip
-    arch="$(uname -m)"
-    # Use the GPL variant which includes ANTLR parser for TPTP language support.
-    # The non-GPL static build omits ANTLR and can only parse SMT2/Sygus.
-    case "$arch" in
-      x86_64|amd64) asset_pattern='Linux-x86_64-static-gpl' ;;
-      aarch64|arm64) asset_pattern='Linux-arm64-static-gpl' ;;
-      *) asset_pattern='Linux' ;;
-    esac
-    curl -fsSL https://api.github.com/repos/cvc5/cvc5/releases/latest -o /tmp/cvc5_release.json
-    url="$(jq -r '.assets[].browser_download_url' /tmp/cvc5_release.json \
-      | grep -Ei "$asset_pattern" | grep -Evi 'sha|sig|asc' | head -1 || true)"
-    if [ -z "$url" ]; then
-      echo "Could not auto-detect a cvc5 release binary." >&2
-      exit 1
-    fi
-    curl -fL "$url" -o /tmp/cvc5.asset
-    # Check if the downloaded asset is a compressed archive
-    case "$url" in
-      *.tar.gz|*.tgz|*.tar.xz|*.tar.bz2|*.tar)
-        mkdir -p /tmp/cvc5_unpack
-        tar -xf /tmp/cvc5.asset -C /tmp/cvc5_unpack
-        found="$(find /tmp/cvc5_unpack -type f -name cvc5 | head -1)"
-        install -m 0755 "$found" /usr/local/bin/cvc5
-        rm -rf /tmp/cvc5_unpack
-        ;;
-      *.zip)
-        mkdir -p /tmp/cvc5_unpack
-        unzip -o /tmp/cvc5.asset -d /tmp/cvc5_unpack
-        found="$(find /tmp/cvc5_unpack -type f -path '*/bin/cvc5' | head -1)"
-        [ -n "$found" ]
-        install -m 0755 "$found" /usr/local/bin/cvc5
-        rm -rf /tmp/cvc5_unpack
-        ;;
-      *)
-        install -m 0755 /tmp/cvc5.asset /usr/local/bin/cvc5
-        ;;
-    esac
+    apk add --no-cache curl ca-certificates jq unzip git build-base cmake python3 gmp-dev bash
+
+    rm -rf /tmp/cvc5
+    cd /tmp
+    git clone https://github.com/cvc5/cvc5.git
+    cd cvc5
+
+    ./configure.sh --auto-download
+
+    cd build
+    make -j$(nproc)
+    make install
+
     /usr/local/bin/cvc5 --version
-    rm -f /tmp/cvc5_release.json /tmp/cvc5.asset
+    /usr/local/bin/cvc5 --lang help || true
+
+    rm -rf /tmp/cvc5
 
 %runscript
     exec cvc5 "$@"

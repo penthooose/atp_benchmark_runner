@@ -35,8 +35,11 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
       opam install -y zipperposition.2.0 2>&1 || \
       echo "WARNING: Could not install zipperposition via opam" >&2
   # Search for the binary (check both possible opam roots)
+    found=""
     for dir in /home/opam/.opam /root/.opam; do
       found="$(find "$dir" -maxdepth 4 -type f -name zipperposition 2>/dev/null | head -1)"
+      if [ -n "$found" ]; then break; fi
+    done
     if [ -n "$found" ]; then
       ln -sf "$found" /usr/local/bin/zipperposition
     else

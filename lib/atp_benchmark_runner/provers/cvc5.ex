@@ -16,8 +16,10 @@ defmodule AtpBenchmarkRunner.Provers.CVC5 do
       kind: :apptainer,
       sif_name: "cvc5",
       executable: "cvc5",
-      command_template:
-        "apptainer exec {sif_path} cvc5 --lang=tptp --tlimit={timeout_ms} {problem}",
+      # No --lang=tptp: modern cvc5 only speaks smt2/sygus2 natively.
+      # The runner converts .p → .smt2 via AtpBenchmarkRunner.TPTPToSMT
+      # before calling cvc5 (see local_runner.ex and HPC job_script).
+      command_template: "apptainer exec {sif_path} cvc5 --tlimit={timeout_ms} {problem}",
       metadata: %{
         logics: ["SMT-LIB", "TPTP where supported by cvc5 parser"],
         integration: :cli,

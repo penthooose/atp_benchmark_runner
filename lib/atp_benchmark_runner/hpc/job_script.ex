@@ -144,17 +144,35 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
 
   @doc """
   Builds the TSV task list consumed by the single-node batch script.
+  For CVC5 provers, .p files are converted to .smt2 inline so the
+  container never sees TPTP input (modern cvc5 only speaks smt2/sygus2).
   """
   @spec single_node_tasks(Run.t(), keyword()) :: binary()
   def single_node_tasks(%Run{} = run, opts \\ []) do
     run.provers
     |> Enum.flat_map(fn %Prover{} = prover ->
+      cvc5? = prover.name == :cvc5
+
       Enum.map(run.problems, fn problem ->
         command = runtime_command(prover, run.problem_timeout_seconds, opts)
 
+        problem_path =
+          if cvc5? do
+            raw = problem.path || problem.name
+
+            if String.ends_with?(raw, ".p") || String.ends_with?(raw, ".tptp") do
+              smt_path = convert_problem_to_smt(raw)
+              smt_path
+            else
+              raw
+            end
+          else
+            problem.path || problem.name
+          end
+
         [
           Atom.to_string(prover.name),
-          problem.path || problem.name,
+          problem_path,
           problem.id,
           Base.encode64(command)
         ]
@@ -163,6 +181,23 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     end)
     |> Enum.join("\n")
     |> Kernel.<>("\n")
+  end
+
+  @doc """
+  Converts a TPTP .p problem file to .smt2 using the library's TPTPToSMT module.
+  Returns the path to the .smt2 file (written alongside the original).
+  """
+  @spec convert_problem_to_smt(binary()) :: binary()
+  def convert_problem_to_smt(path) when is_binary(path) do
+    smt_path =
+      path |> String.replace_suffix(".p", ".smt2") |> String.replace_suffix(".tptp", ".smt2")
+
+    unless File.exists?(smt_path) do
+      smt_content = AtpBenchmarkRunner.TPTPToSMT.convert_file!(path)
+      File.write!(smt_path, smt_content)
+    end
+
+    smt_path
   end
 
   @doc """
