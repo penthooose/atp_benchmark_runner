@@ -74,7 +74,60 @@ defmodule AtpBenchmarkRunner.Result do
     |> Keyword.put(:problem_id, problem_id)
     |> Keyword.put_new(:szs_status, parse_szs_status(output))
     |> Keyword.put_new(:raw_output, output)
+    |> refine_timeout_to_gaveup()
+    |> add_unsupported_reason()
     |> new()
+  end
+
+  # Add a metadata reason when the status is UnsupportedLogic, so the
+  # report can show why the problem was skipped.
+  defp add_unsupported_reason(attrs) do
+    status = Keyword.get(attrs, :szs_status)
+
+    if status == "UnsupportedLogic" do
+      metadata = Keyword.get(attrs, :metadata, %{})
+
+      metadata =
+        Map.put_new(
+          metadata,
+          :reason,
+          "Prover produced no output — the problem type is not solvable " <>
+            "by this prover (e.g., no conjecture for a refutation prover)."
+        )
+
+      Keyword.put(attrs, :metadata, metadata)
+    else
+      attrs
+    end
+  end
+
+  # When the prover process exited normally (exit code 0) but the SZS status
+  # is "Timeout", it means the prover ran through all its strategies without
+  # finding a proof. This is not a real timeout — the problem type is not
+  # solvable by this prover (e.g., no conjecture for a refutation prover).
+  # Report as UnsupportedLogic instead of misleading "Timeout" or "GaveUp".
+  defp refine_timeout_to_gaveup(attrs) do
+    status = Keyword.get(attrs, :szs_status)
+    exit_status = Keyword.get(attrs, :exit_status)
+
+    if status == "Timeout" and exit_status == 0 do
+      metadata = Keyword.get(attrs, :metadata, %{})
+
+      metadata =
+        Map.put_new(
+          metadata,
+          :reason,
+          "Prover exited normally with status \"Timeout\" in output — " <>
+            "the problem type is not solvable by this prover " <>
+            "(e.g., no conjecture for a refutation prover)."
+        )
+
+      attrs
+      |> Keyword.put(:szs_status, "UnsupportedLogic")
+      |> Keyword.put(:metadata, metadata)
+    else
+      attrs
+    end
   end
 
   @doc """
@@ -117,31 +170,39 @@ defmodule AtpBenchmarkRunner.Result do
   # Infer SZS status from common crash/error patterns when no explicit SZS line.
   # Uses case-insensitive matching via String.downcase/1.
   defp infer_error_status(output) do
-    lower = String.downcase(output)
+    trimmed = String.trim(output)
 
     cond do
-      String.contains?(lower, "typeerror") or
-        String.contains?(lower, "type error") or
-        String.contains?(lower, "ill-typed") or
-          String.contains?(lower, "type check") ->
-        "TypeError"
-
-      String.contains?(lower, "unification error") or
-          String.contains?(lower, "unification failure") ->
-        "InputError"
-
-      String.contains?(lower, "inputerror") or
-        String.contains?(lower, "parse error") or
-        String.contains?(lower, "closing bracket") or
-          String.contains?(lower, "expected but") ->
-        "InputError"
-
-      String.contains?(lower, "not found") or
-          String.contains?(lower, "does not exist") ->
-        "InputError"
+      trimmed == "" or trimmed == "\n" ->
+        "UnsupportedLogic"
 
       true ->
-        nil
+        lower = String.downcase(output)
+
+        cond do
+          String.contains?(lower, "typeerror") or
+            String.contains?(lower, "type error") or
+            String.contains?(lower, "ill-typed") or
+              String.contains?(lower, "type check") ->
+            "TypeError"
+
+          String.contains?(lower, "unification error") or
+              String.contains?(lower, "unification failure") ->
+            "InputError"
+
+          String.contains?(lower, "inputerror") or
+            String.contains?(lower, "parse error") or
+            String.contains?(lower, "closing bracket") or
+              String.contains?(lower, "expected but") ->
+            "InputError"
+
+          String.contains?(lower, "not found") or
+              String.contains?(lower, "does not exist") ->
+            "InputError"
+
+          true ->
+            nil
+        end
     end
   end
 

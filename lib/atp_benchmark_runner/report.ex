@@ -39,7 +39,10 @@ defmodule AtpBenchmarkRunner.Report do
     table =
       rows
       |> Enum.map_join("\n", fn row ->
-        "| #{row.prover} | #{row.total} | #{row.solved} | #{Float.round(row.solve_rate * 100, 1)}% |"
+        avg_s = Float.round(row.avg_wall_time_ms / 1000, 1)
+        attempted = row.attempted
+
+        "| #{row.prover} | #{row.total} | #{attempted} | #{row.solved} | #{Float.round(row.solve_rate * 100, 1)}% | #{avg_s}s |"
       end)
 
     interesting = interesting(results, problems, our_prover)
@@ -47,8 +50,8 @@ defmodule AtpBenchmarkRunner.Report do
     """
     ## ATP Benchmark Summary
 
-    | Prover | Total | Solved | Solve rate |
-    |---|---:|---:|---:|
+    | Prover | Total | Attempted | Solved | Solve rate | Avg time |
+    |---|---:|---:|---:|---:|---:|
     #{table}
 
     - Easy problems our prover failed: #{length(interesting.easy_failed_by_ours)}
@@ -77,13 +80,27 @@ defmodule AtpBenchmarkRunner.Report do
       total = length(prover_results)
       solved = Enum.count(prover_results, &Result.solved?/1)
 
+      # Compute avg wall time only for real attempts (exclude UnsupportedLogic)
+      attempted = Enum.reject(prover_results, &(&1.szs_status == "UnsupportedLogic"))
+      attempted_count = length(attempted)
+
+      times =
+        attempted
+        |> Enum.map(&(&1.wall_time_ms || 0))
+
+      total_wall = Enum.sum(times)
+      avg_wall = if attempted_count > 0, do: div(total_wall, attempted_count), else: 0
+
       %{
         prover: prover,
         total: total,
+        attempted: attempted_count,
         solved: solved,
         failed: total - solved,
         solve_rate: ratio(solved, total),
-        statuses: Enum.frequencies_by(prover_results, &(&1.szs_status || "Unknown"))
+        statuses: Enum.frequencies_by(prover_results, &(&1.szs_status || "Unknown")),
+        avg_wall_time_ms: avg_wall,
+        total_wall_time_ms: total_wall
       }
     end)
     |> Enum.sort_by(& &1.prover)
@@ -269,12 +286,14 @@ defmodule AtpBenchmarkRunner.Report do
   """
   @spec print_per_prover(map()) :: :ok
   def print_per_prover(report) do
-    IO.puts("| Prover | Total | Solved | Failed | Solve Rate |")
-    IO.puts("|--------|------:|-------:|-------:|-----------:|")
+    IO.puts("| Prover | Total | Attempted | Solved | Failed | Solve Rate | Avg Time |")
+    IO.puts("|--------|------:|----------:|-------:|-------:|-----------:|---------:|")
 
     Enum.each(report.by_prover, fn p ->
+      avg_s = Float.round(p.avg_wall_time_ms / 1000, 1)
+
       IO.puts(
-        "| #{p.prover} | #{p.total} | #{p.solved} | #{p.failed} | #{Float.round(p.solve_rate * 100, 1)}% |"
+        "| #{p.prover} | #{p.total} | #{p.attempted} | #{p.solved} | #{p.failed} | #{Float.round(p.solve_rate * 100, 1)}% | #{avg_s}s |"
       )
     end)
 

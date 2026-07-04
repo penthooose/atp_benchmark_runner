@@ -227,13 +227,55 @@ defmodule AtpBenchmarkRunner.LocalRunner do
           compatible = filter_compatible_problems(prover, problems)
 
           if compatible != problems do
-            skipped = length(problems) - length(compatible)
-            IO.puts("   ⚠ #{prover.name}: skipping #{skipped} problem(s) (incompatible logic)")
-          end
+            skipped_ids = MapSet.new(compatible, & &1.id)
+            skipped = Enum.reject(problems, &MapSet.member?(skipped_ids, &1.id))
 
-          Enum.map(compatible, fn problem ->
-            run_one(prover, problem, timeout_seconds, include_raw_output, verbose)
-          end)
+            IO.puts(
+              "   ⚠ #{prover.name}: skipping #{length(skipped)} problem(s) (incompatible logic — UnsupportedLogic)"
+            )
+
+            skipped_results =
+              Enum.map(skipped, fn problem ->
+                logic = problem.logic || "unknown"
+                has_funcs = has_function_symbols?(problem.path)
+
+                reason =
+                  cond do
+                    prover.name == :lash and has_funcs ->
+                      "#{prover.name} cannot handle #{problem.name}: #{logic} problem contains " <>
+                        "function symbols requiring $i (individual) types, which #{prover.name} cannot parse."
+
+                    prover.name == :lash and not has_conjecture?(problem.path) ->
+                      "#{prover.name} cannot handle #{problem.name}: problem has no conjecture and is " <>
+                        "Satisfiable — #{prover.name} is a refutation prover and cannot determine satisfiability."
+
+                    true ->
+                      "#{prover.name} is a THF-only prover. Problem #{problem.name} uses #{logic} " <>
+                        "logic which requires $i (individual) types that #{prover.name} cannot handle."
+                  end
+
+                Result.new(%{
+                  problem_id: problem.id,
+                  prover: prover.name,
+                  szs_status: "UnsupportedLogic",
+                  wall_time_ms: 0,
+                  metadata: %{
+                    reason: reason
+                  }
+                })
+              end)
+
+            compatible_results =
+              Enum.map(compatible, fn problem ->
+                run_one(prover, problem, timeout_seconds, include_raw_output, verbose)
+              end)
+
+            compatible_results ++ skipped_results
+          else
+            Enum.map(compatible, fn problem ->
+              run_one(prover, problem, timeout_seconds, include_raw_output, verbose)
+            end)
+          end
         end)
 
       _ ->
@@ -537,18 +579,30 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     problem_basename = Path.basename(problem_path, ".p")
 
     # Special handling for CVC5: convert TPTP → SMT-LIB before running
+    # Special handling for Lash: convert FOF/CNF/TFF → THF via Elixir TptpToTHF
     {mount_dir, mount_file} =
-      if prover.name == :cvc5 do
-        smt_content = AtpBenchmarkRunner.TPTPToSMT.convert_file!(problem_path)
-        smt_dir = AtpBenchmarkRunner.Config.smt_tmp_dir()
-        File.mkdir_p!(smt_dir)
-        smt_name = "#{problem_basename}.smt2"
-        File.write!(Path.join(smt_dir, smt_name), smt_content)
-        {docker_path(smt_dir), smt_name}
-      else
-        dir = problem_path |> Path.dirname() |> Path.expand() |> docker_path()
-        file = Path.basename(problem_path)
-        {dir, file}
+      cond do
+        prover.name == :cvc5 ->
+          smt_content = AtpBenchmarkRunner.TPTPToSMT.convert_file!(problem_path)
+          smt_dir = AtpBenchmarkRunner.Config.smt_tmp_dir()
+          File.mkdir_p!(smt_dir)
+          smt_name = "#{problem_basename}.smt2"
+          File.write!(Path.join(smt_dir, smt_name), smt_content)
+          {docker_path(smt_dir), smt_name}
+
+        prover.name == :lash ->
+          thf_dir = AtpBenchmarkRunner.Config.thf_tmp_dir()
+          File.mkdir_p!(thf_dir)
+
+          thf_path =
+            AtpBenchmarkRunner.TPTP.ToTHF.ensure_thf(problem_path, :lash, output_dir: thf_dir)
+
+          {docker_path(thf_dir), Path.basename(thf_path)}
+
+        true ->
+          dir = problem_path |> Path.dirname() |> Path.expand() |> docker_path()
+          file = Path.basename(problem_path)
+          {dir, file}
       end
 
     # Build Docker args from the prover's command template
@@ -749,14 +803,31 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     end
   end
 
+  @known_supported_logics ~w(fof cnf tff thf type axiom conjecture hypothesis
+                               and or not impl equiv true false include)
+
   # --- Logic compatibility filtering ---
 
   @doc """
-  Filters problems to only those whose logic (SPC prefix) is supported by the prover.
+  Filters problems to only those whose logic is supported by the prover.
 
-  If the prover has no `:supported_logics` in its metadata, all problems pass through.
+  For Lash specifically, this uses content-based scanning:
+  - THF/TH0: always compatible (already $o-level)
+  - FOF/CNF/TFF without function symbols: compatible (propositional,
+    converter turns them into $o-level THF)
+  - FOF/CNF/TFF with function symbols: incompatible (lash cannot
+    handle $i typed terms)
+
+  For other provers, falls back to `:supported_logics` metadata if set.
   """
   @spec filter_compatible_problems(Prover.t(), [Problem.t()]) :: [Problem.t()]
+
+  # Lash: content-based filtering
+  def filter_compatible_problems(%Prover{name: :lash} = _prover, problems) do
+    Enum.filter(problems, &lash_compatible?/1)
+  end
+
+  # Generic: logic-prefix based filtering
   def filter_compatible_problems(
         %Prover{metadata: %{supported_logics: logics}} = _prover,
         problems
@@ -771,4 +842,67 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   end
 
   def filter_compatible_problems(_prover, problems), do: problems
+
+  # ── Lash compatibility helpers ──────────────────────────────────────────────
+
+  @doc false
+  def lash_compatible?(%Problem{logic: logic, path: path, expected_status: expected})
+      when is_binary(logic) do
+    prefix = logic |> String.split("_") |> List.first() |> String.downcase()
+
+    cond do
+      prefix in ~w(thf th0) ->
+        true
+
+      has_function_symbols?(path) ->
+        false
+
+      not has_conjecture?(path) and expected == "Satisfiable" ->
+        # Lash is a refutation prover — without a conjecture it can only
+        # detect Unsatisfiable (axiom contradictions). It cannot determine
+        # plain Satisfiable from axioms alone.
+        false
+
+      true ->
+        true
+    end
+  end
+
+  def lash_compatible?(_problem), do: false
+
+  @doc false
+  def has_function_symbols?(path) do
+    content = File.read!(path)
+
+    # Remove comments and blank lines, join into one flat line
+    flat =
+      content
+      |> String.split(~r/[\r\n]+/)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(String.starts_with?(&1, "%") or &1 == ""))
+      |> Enum.join(" ")
+
+    # Strip formula headers (fof|cnf|tff|thf(name, role, ) leaving only body content)
+    # This avoids matching TPTP formula names like `some_identity(` in
+    # `fof(some_identity, axiom, ...)`.
+    # The replacement leaves unbalanced content (extra ) and .) but that's fine
+    # for the regex scan — we only care about `word(` patterns.
+    body_only =
+      Regex.replace(
+        ~r/(?:fof|cnf|tff|thf)\(\s*[^,]+?\s*,\s*[^,]+?\s*,\s*/,
+        flat,
+        ""
+      )
+
+    # Scan remaining content for `word(` patterns (potential function symbols)
+    matches = Regex.scan(~r/\b([a-z_][a-zA-Z0-9_]*)\s*\(/, body_only)
+
+    Enum.any?(matches, fn [_, name] -> name not in @known_supported_logics end)
+  end
+
+  @doc false
+  def has_conjecture?(path) do
+    content = File.read!(path)
+    String.match?(content, ~r/\bconjecture\b/i)
+  end
 end

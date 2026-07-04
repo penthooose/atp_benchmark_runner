@@ -3,23 +3,15 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
 
 %labels
     Maintainer AISE Bamberg
-    Prover Lash
-    Description Lash THF prover for ATP Benchmark Runner
+    Prover Lash (WSL test)
+    Description Lash THF prover — WSL/direct-internet build test
     Source http://grid01.ciirc.cvut.cz/~chad/lash/
 
 %arguments
-    LASH_URL=http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz
+    LASH_URL=http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tar.gz
 
 %post
-    set -ex
-    : "${LASH_URL:=http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz}"
-    # Proxy for FAU compute node internet access (Fritz, Helma, etc.)
-    export HTTP_PROXY="http://proxy.nhr.fau.de:80"
-    export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
-    export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
-    export http_proxy="$HTTP_PROXY"
-    export https_proxy="$HTTPS_PROXY"
-    export no_proxy="$NO_PROXY"
+    set -eux
 
     # ── zlib (minisat dependency in Lash) ───────────────────────────────────
     cd /tmp && \
@@ -77,8 +69,5 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     exec lash "$@"
 
 %help
-    Lash — THF-only higher-order ATP.
+    Lash — THF-only higher-order ATP (WSL test build).
     Use with: lash -M /opt/lash/modes -t <timeout_seconds> <problem.p>
-
-    THF-only. FOF/CNF/TFF problems are converted to THF on the host side
-    via Elixir TPTPToTHF before execution.

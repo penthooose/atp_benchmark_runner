@@ -1,6 +1,15 @@
 defmodule AtpBenchmarkRunner.Provers.Lash do
   @moduledoc """
-  Provider placeholder for Lash.
+  Provider for Lash (THF higher-order prover).
+
+  Lash is a THF-only higher-order prover. FOF/CNF/TFF problems are converted
+  to THF on the host side via `TPTP.ToTHF` before the file reaches the
+  container.
+
+  **Important:** Lash only supports problems at the `$o` (boolean) level.
+  It cannot handle `$i` (individual) types — FOF problems with function
+  symbols, individual constants, or first-order quantification over
+  individuals will fail with an `UnsupportedLogic` result.
   """
 
   @behaviour AtpBenchmarkRunner.Provers.Provider
@@ -19,11 +28,10 @@ defmodule AtpBenchmarkRunner.Provers.Lash do
       command_template:
         "apptainer exec {sif_path} lash -M /opt/lash/modes -t {timeout_seconds} {problem}",
       metadata: %{
-        logics: ["THF (typed higher-order only)"],
         supported_logics: [:thf, :th0],
+        logics: ["THF only — FOF/CNF/TFF problems with $i types are unsupported"],
         integration: :cli,
         provider: __MODULE__,
-        experimental?: true,
         k8s_candidate?: false
       }
     })
@@ -41,7 +49,11 @@ defmodule AtpBenchmarkRunner.Provers.Lash do
       license: "unknown",
       notes: [
         "No Elixir binding found.",
-        "Container definition is intentionally a placeholder until a stable source/binary URL is confirmed."
+        "THF-only prover. FOF/CNF/TFF problems with $i types will be",
+        "skipped (UnsupportedLogic). Only problems at the $o boolean",
+        "level are supported.",
+        "FOF problems without function symbols (pure propositional)",
+        "work — they convert to $o-level THF."
       ]
     })
   end

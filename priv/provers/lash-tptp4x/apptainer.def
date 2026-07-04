@@ -1,0 +1,181 @@
+Bootstrap: docker
+From: ocaml/opam:ubuntu-22.04-ocaml-4.12
+
+%labels
+    Maintainer AISE Bamberg
+    Prover Lash (tptp4X variant)
+    Description Lash with tptp4X type promotion for FOF/CNF/TFF support
+    Source http://grid01.ciirc.cvut.cz/~chad/lash/
+
+%arguments
+    LASH_URL=http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz
+
+%post
+    set -ex
+    : "${LASH_URL:=http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz}"
+    export HTTP_PROXY="http://proxy.nhr.fau.de:80"
+    export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
+    export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
+    export http_proxy="$HTTP_PROXY"
+    export https_proxy="$HTTPS_PROXY"
+    export no_proxy="$NO_PROXY"
+
+    # ── Build Lash ──────────────────────────────────────────────────────────
+    # zlib from source (needed by minisat dependency in lash)
+    cd /tmp && \
+    curl -fSL "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz" -o zlib.tar.gz && \
+    tar -xzf zlib.tar.gz && \
+    cd zlib-1.3.1 && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && \
+    make install && \
+    hash -r && \
+    cd / && rm -rf /tmp/zlib-1.3.1 /tmp/zlib.tar.gz
+
+    mkdir -p /opt/lash
+    curl -fSL "$LASH_URL" -o /tmp/lash.tar.gz
+    tar --no-same-owner -xzf /tmp/lash.tar.gz -C /opt/lash --strip-components=1
+
+    if [ -d /home/opam/.opam ]; then
+      export OPAMROOT=/home/opam/.opam
+      rm -f /usr/share/opam/sandbox.sh 2>/dev/null || true
+    else
+      export OPAMROOT=/tmp/opam-root
+      opam init --disable-sandboxing --compiler=ocaml-base-compiler.4.12.1 --yes 2>&1
+    fi
+    eval $(opam env)
+
+    cd /opt/lash/source
+    export C_INCLUDE_PATH="/home/opam/.opam/4.12/lib/ocaml${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+    export CPLUS_INCLUDE_PATH="/home/opam/.opam/4.12/lib/ocaml${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
+    ./configure
+    SOLVER_CC="$(find /opt/lash -name 'Solver.cc' -type f 2>/dev/null | head -1)"
+    if [ -n "$SOLVER_CC" ]; then
+      sed -i 's/caml_process_pending_signals\b/caml_process_pending_signals_exn/g' "$SOLVER_CC"
+    fi
+    OCAML_LIBDIR="$(ocamlc -where 2>/dev/null || echo /home/opam/.opam/4.12/lib/ocaml)"
+    if [ -f "$OCAML_LIBDIR/libasmrun.a" ]; then
+      sed -i "s|-o lash|-o lash \"$OCAML_LIBDIR/libasmrun.a\"|" Makefile
+    fi
+    make -j$(nproc)
+    candidate="$(find /opt/lash -maxdepth 4 -type f \( -name 'lash' -o -name 'lash.opt' -o -name 'lash.byte' \) | head -1 || true)"
+    if [ -z "$candidate" ]; then
+      echo "ERROR: Lash binary not found after build." >&2
+      exit 1
+    fi
+    install -m 0755 "$candidate" /usr/local/bin/lash
+    /usr/local/bin/lash --help >/dev/null 2>&1 || true
+
+    # ── Build tptp4X (with JJParser) ────────────────────────────────────────
+    # Compile minimal libcurl from source (no SSL) — apt-get may fail on
+    # apptainer builds without --fakeroot on HPC clusters.
+    cd /tmp && \
+    curl -fSL "https://curl.se/download/curl-8.12.1.tar.gz" -o curl.tar.gz && \
+    tar -xzf curl.tar.gz && \
+    cd curl-8.12.1 && \
+    ./configure --prefix=/usr/local --enable-static --disable-shared \
+      --without-ssl --without-libpsl --without-brotli --without-zstd \
+      --without-libidn2 --without-nghttp2 --disable-ftp --disable-ldap \
+      --disable-ldaps --disable-rtsp --disable-dict --disable-telnet \
+      --disable-tftp --disable-pop3 --disable-imap --disable-smtp \
+      --disable-gopher --disable-mqtt --disable-docs --disable-manual && \
+    make -j$(nproc) && \
+    make install && \
+    hash -r && \
+    cd / && rm -rf /tmp/curl-8.12.1 /tmp/curl.tar.gz
+
+    # git and ca-certificates are only needed for cloning; already available
+    rm -rf /tmp/JJParser /tmp/tptp4X
+    git clone https://github.com/TPTPWorld/JJParser.git /tmp/JJParser
+    git clone https://github.com/TPTPWorld/TPTP4X.git /tmp/tptp4X
+    cd /tmp/tptp4X
+    # JJParser symlink (../JJParser) resolves to sibling directory
+    # Makefile handles -DTPTP_HOME quoting when TPTP_HOME is a make variable
+    TPTP_HOME=/usr/local make CC=gcc LFLAGS="-L/usr/local/lib -lcurl -lz -lm"
+    install -m 0755 tptp4X /usr/local/bin/tptp4X
+    rm -rf /tmp/tptp4X /tmp/JJParser
+
+    # ── fof2thf: type-promotion script (pure bash) ─────────────────────────
+    cat > /usr/local/bin/fof2thf << 'F2T'
+#!/bin/bash
+# Reads TPTP from stdin, promotes FOF/CNF/TFF to THF with type declarations.
+# Input should be single-line formulas (tptp4X normalizes multi-line).
+# After tptp4X normalization, bare symbols appear as e.g.:
+#   fof(name,axiom, p ).
+#   fof(name,axiom, ( p | q )).
+set -e
+c=$(cat)
+# Update SPC header
+c=$(echo "$c" | sed 's/^% SPC  *:.*/% SPC: THF_THM_NEQ/')
+# Extract bare proposition symbols: single lowercase words in formula position
+# that are standalone (not part of a larger word, not followed by '(')
+# TPTP keywords to exclude
+KW='fof cnf tff thf axiom conjecture type hypothesis and or not impl equiv true false include'
+decls=$(echo "$c" \
+  | sed 's/.*(//' \
+  | grep -oE '\b[a-z][a-zA-Z0-9_]*\b' \
+  | grep -vE '^('"$(echo $KW | tr ' ' '|')"')$' \
+  | grep -vE '^[A-Z]' | grep -vE '^[xyzuvwXYZ]$' \
+  | sort -u \
+  | while read s; do echo "thf(tp_$s, type, ($s: \$o))."; done)
+# Rename fof/cnf/tff -> thf
+c=$(echo "$c" | sed 's/\bfof(/thf(/g; s/\bcnf(/thf(/g; s/\btff(/thf(/g;')
+# Insert type declarations after first thf( formula
+if [ -n "$decls" ]; then
+  first=$(echo "$c" | grep -n '^thf(' | head -1 | cut -d: -f1)
+  if [ -n "$first" ]; then
+    head -$((first-1)) <<<"$c"
+    echo "$decls"
+    tail -n +$first <<<"$c"
+  else
+    echo "$c"
+  fi
+else
+  echo "$c"
+fi
+F2T
+    chmod +x /usr/local/bin/fof2thf
+
+    # ── lash-wrapper ─────────────────────────────────────────────────────────
+    cat > /usr/local/bin/lash-wrapper << 'SCRIPT'
+#!/bin/bash
+set -Eeuo pipefail
+ARGS=(); PROBLEM=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -t) ARGS+=("$1" "$2"); shift 2 ;;
+    -M) ARGS+=("$1" "$2"); shift 2 ;;
+    -*|--*) ARGS+=("$1"); shift ;;
+    *) if [ -z "$PROBLEM" ] && [ -f "$1" ]; then PROBLEM="$1"; fi; ARGS+=("$1"); shift ;;
+  esac
+done
+if [ -z "$PROBLEM" ]; then exec lash "${ARGS[@]}"; fi
+TMP=$(mktemp /tmp/lash_norm_XXXXXX.p)
+TMP2=$(mktemp /tmp/lash_thf_XXXXXX.p)
+if tptp4X "$PROBLEM" > "$TMP" 2>/dev/null; then
+  INPUT="$TMP"
+else
+  INPUT="$PROBLEM"
+fi
+if head -20 "$INPUT" 2>/dev/null | grep -qiE '^% SPC.*THF'; then
+  exec lash "${ARGS[@]}" "$INPUT"
+fi
+fof2thf < "$INPUT" > "$TMP2" 2>/dev/null || { rm -f "$TMP2" "$TMP"; echo "% SZS status Error" >&2; exit 1; }
+FINAL_ARGS=(); FOUND=0
+for arg in "${ARGS[@]}"; do
+  if [ "$arg" = "$PROBLEM" ] && [ "$FOUND" = 0 ]; then FINAL_ARGS+=("$TMP2"); FOUND=1; else FINAL_ARGS+=("$arg"); fi
+done
+lash "${FINAL_ARGS[@]}"; RC=$?; rm -f "$TMP2" "$TMP"; exit $RC
+SCRIPT
+    chmod +x /usr/local/bin/lash-wrapper
+
+    # Cleanup
+    rm -rf /tmp/lash.tar.gz 2>/dev/null || true
+
+%runscript
+    exec lash-wrapper "$@"
+
+%help
+    Lash + tptp4X variant — supports all TPTP formats.
+    Uses tptp4X (with JJParser) for TPTP normalization, then fof2thf
+    for FOF/CNF/TFF → THF type promotion.

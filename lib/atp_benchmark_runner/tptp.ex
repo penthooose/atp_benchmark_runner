@@ -438,6 +438,7 @@ defmodule AtpBenchmarkRunner.TPTP do
     |> to_string()
     |> Path.join("tptp_examples/*.{p,ax}")
     |> Path.wildcard()
+    |> Enum.reject(&String.ends_with?(&1, "_thf.p"))
     |> Enum.sort()
   end
 end
