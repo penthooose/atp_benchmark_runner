@@ -80,10 +80,71 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     fi
     install -m 0755 "$candidate" /usr/local/bin/lash
     /usr/local/bin/lash --help >/dev/null 2>&1 || true
+
+    # Create fof2thf — FOF/CNF/TFF → THF converter (Python, self-contained)
+    cat > /usr/local/bin/fof2thf << 'PYEOF'
+#!/usr/bin/env python3
+import re, sys
+Q_RE = re.compile(r'([!?])\s*\[([^\]]+?)\]')
+def add_types(vl):
+    ps = []
+    for v in vl.split(","):
+        v = v.strip()
+        if v and ":" not in v and re.match(r'^[a-z]', v):
+            ps.append(f"{v}: $i")
+        else:
+            ps.append(v)
+    return ", ".join(ps)
+def promote_q(m):
+    return f"{m.group(1)} [{add_types(m.group(2))}]"
+def convert_line(l):
+    l = re.sub(r'\bfof\(', 'thf(', l)
+    l = re.sub(r'\bcnf\(', 'thf(', l)
+    l = re.sub(r'\btff\(', 'thf(', l)
+    l = Q_RE.sub(promote_q, l)
+    return l
+def main():
+    c = open(sys.argv[1]).read() if len(sys.argv) > 1 else sys.stdin.read()
+    c = re.sub(r'(^% SPC\s*:)\s*\S+', r'\1 THF_THM_NEQ', c, flags=re.MULTILINE)
+    for line in c.splitlines():
+        print(convert_line(line))
+if __name__ == '__main__':
+    main()
+PYEOF
+    chmod +x /usr/local/bin/fof2thf
+
+    # Create lash-wrapper: detects SPC header, promotes non-THF via fof2thf
+    cat > /usr/local/bin/lash-wrapper << 'SCRIPT'
+#!/bin/bash
+set -Eeuo pipefail
+ARGS=(); PROBLEM=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -t) ARGS+=("$1" "$2"); shift 2 ;;
+    -M) ARGS+=("$1" "$2"); shift 2 ;;
+    -*|--*) ARGS+=("$1"); shift ;;
+    *) if [ -z "$PROBLEM" ] && [ -f "$1" ]; then PROBLEM="$1"; fi; ARGS+=("$1"); shift ;;
+  esac
+done
+if [ -z "$PROBLEM" ]; then exec lash "${ARGS[@]}"; fi
+if head -20 "$PROBLEM" 2>/dev/null | grep -qiE '^% SPC.*THF'; then exec lash "${ARGS[@]}"; fi
+TMP=$(mktemp /tmp/lash_thf_XXXXXX.p)
+fof2thf "$PROBLEM" > "$TMP" 2>/dev/null || { rm -f "$TMP"; echo "% SZS status Error" >&2; exit 1; }
+FINAL_ARGS=()
+for arg in "${ARGS[@]}"; do
+  if [ "$arg" = "$PROBLEM" ]; then FINAL_ARGS+=("$TMP"); else FINAL_ARGS+=("$arg"); fi
+done
+lash "${FINAL_ARGS[@]}"; RC=$?; rm -f "$TMP"; exit $RC
+SCRIPT
+    chmod +x /usr/local/bin/lash-wrapper
+
+    # Keep /opt/lash/modes/ — Lash needs its schedule files at runtime.
+    # The compiled-in default path is ../modes relative to the build dir,
+    # resolved at runtime to /opt/lash/modes/.
     rm -rf /tmp/lash.tar.gz 2>/dev/null || true
 
 %runscript
-    exec lash "$@"
+    exec lash-wrapper "$@"
 
 %help
     Build arguments:
@@ -92,4 +153,16 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     Source: http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz (confirmed working)
     Tarball structure: lash-1.14rc1/{b.p,d.p,e.p,c.p,source/}. `cd source/ && ./configure && make`.
     The binary is installed to /usr/local/bin/lash.
+
+    Use via the benchmark runner (recommended):
+      lash -M /opt/lash/modes -t <timeout_seconds> <problem.p>
+
+    Flags:
+      -M <dir>       Mode/schedule file directory (default: built-in relative path)
+      -t N           Timeout in seconds
+
+    IMPORTANT: Lash natively only supports THF (typed higher-order) syntax.
+    This image includes fof2thf + lash-wrapper which auto-translates
+    FOF/CNF/TFF to THF, so any TPTP problem format is accepted.
+
     Requires OCaml, gcc, make, git (provided by ocaml/opam:ubuntu-22.04-ocaml-4.12).

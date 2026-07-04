@@ -75,9 +75,27 @@ defmodule AtpBenchmarkRunner.Problem do
     header = path |> File.read!() |> parse_tptp_header()
     attrs = merge_header_attrs(header, attrs)
 
-    path
-    |> from_path(attrs)
-    |> Map.put(:source, Keyword.get(attrs, :source, :local))
+    problem =
+      path
+      |> from_path(attrs)
+      |> Map.put(:source, Keyword.get(attrs, :source, :local))
+
+    # Override logic from SPC header when available — the file-name
+    # heuristic (separator → logic) is wrong for e.g. THF001+0.p
+    # (separator "+" → "FOF", but SPC says "THF_THM_NEQ").
+    case problem.metadata[:spc] do
+      nil ->
+        problem
+
+      spc when is_binary(spc) ->
+        prefix = spc |> String.split("_") |> List.first()
+
+        if prefix && prefix != "" do
+          %{problem | logic: prefix}
+        else
+          problem
+        end
+    end
   end
 
   @doc """

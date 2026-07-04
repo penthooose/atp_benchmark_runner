@@ -1,29 +1,56 @@
-# LEO-II container image (legacy OCaml build).
+# LEO-II container image (OCaml 4.12 opam-based build with compat patches).
+# Uses the same ocaml/opam base + fixes as the Apptainer .def file.
 #   docker build -t docker.io/aise/atp-leo2:latest priv/provers/leo2/
 #   docker run --rm docker.io/aise/atp-leo2:latest --timeout 30 /problems/problem.p
-FROM docker.io/ubuntu:20.04 AS builder
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl build-essential make ocaml ocaml-findlib camlp4 camlp5 \
-    && rm -rf /var/lib/apt/lists/*
+FROM docker.io/ocaml/opam:ubuntu-22.04-ocaml-4.12 AS builder
 
-RUN curl -fL http://page.mi.fu-berlin.de/cbenzmueller/leo/leo2_v1.7.0.tgz -o /tmp/leo2.tgz && \
+USER root
+RUN apt-get update -qq && apt-get install -y -qq pkg-config m4 libpcre2-dev zlib1g-dev
+
+# Set up opam env
+ENV OPAMROOT=/home/opam/.opam
+RUN rm -f /usr/share/opam/sandbox.sh 2>/dev/null || true
+ENV OPAMYES=1
+RUN eval $(opam env) && opam install -y ocamlfind camlp5 camlp4
+
+# Download and extract LEO-II
+RUN curl -fSL "http://page.mi.fu-berlin.de/cbenzmueller/leo/leo2_v1.7.0.tgz" -o /tmp/leo2.tgz && \
     mkdir -p /opt/leo2 && \
     tar -xzf /tmp/leo2.tgz -C /opt/leo2 --strip-components=1
 
 WORKDIR /opt/leo2/src
-RUN make 2>&1 || true
 
-RUN printf '#!/bin/sh\necho "LEO-II binary not available (build fails on modern OCaml)." >&2\nexit 127\n' > /usr/local/bin/leo; \
-    chmod +x /usr/local/bin/leo; \
-    candidate="$(find /opt/leo2 -type f \( -name 'leo' -o -name 'leo.opt' -o -name 'leo.byte' \) | head -1)"; \
-    if [ -n "$candidate" ]; then \
-    cp "$candidate" /usr/local/bin/leo; \
-    chmod +x /usr/local/bin/leo; \
-    echo "LEO-II built from source: $candidate"; \
-    else \
-    echo "LEO-II source build failed, using stub binary"; \
-    fi
+# OCaml 4.12 bytes/string compat: patch read_file to return string
+RUN sed -i 's/read_file file_out in/Bytes.to_string (read_file file_out) in/g' calculus/automation.ml
 
-FROM docker.io/ubuntu:20.04
+# GCC compat: old MiniSat code needs -fpermissive
+RUN sed -i 's|cd ../lib/minisat;|cd ../lib/minisat; export CFLAGS="-Wall -Wno-parentheses -fPIC -fpermissive";|' Makefile && \
+    sed -i 's|\$(CXX) -c -fPIC -Wall|\$(CXX) -c -fPIC -Wall -fpermissive|' Makefile
+
+RUN eval $(opam env) && make
+
+RUN candidate="$(find /opt/leo2 -type f \( -name 'leo' -o -name 'leo.opt' -o -name 'leo.byte' \) | head -1)"; \
+    if [ -z "$candidate" ]; then \
+    echo "LEO-II build failed" >&2; \
+    exit 1; \
+    fi; \
+    cp "$candidate" /usr/local/bin/leo
+
+# Use the SAME base image for runtime — preserves ocamlrun + shared libs at correct paths
+FROM docker.io/ocaml/opam:ubuntu-22.04-ocaml-4.12
+USER root
 COPY --from=builder /usr/local/bin/leo /usr/local/bin/leo
-ENTRYPOINT ["leo"]
+# Leo bytecode links against dllminisatinterface.so at build-time paths
+COPY --from=builder /opt/leo2/src/interfaces/minisat/dllminisatinterface.so /opt/leo2/src/interfaces/minisat/dllminisatinterface.so
+# LEO-II is a cooperative prover — needs E-Prover as first-order backend.
+RUN apt-get update -qq && apt-get install -y -qq ca-certificates git build-essential gawk make perl && rm -rf /var/lib/apt/lists/* && \
+    git clone --depth 1 https://github.com/eprover/eprover.git /opt/eprover && \
+    cd /opt/eprover && \
+    ./configure --enable-ho --bindir=/usr/local/bin && \
+    make rebuild && make install && \
+    ln -sf eprover-ho /usr/local/bin/eprover && \
+    rm -rf /opt/eprover
+# Create ATP config so Leo2 can find E-Prover
+RUN echo 'e = /usr/local/bin/eprover' > /home/opam/.leoatprc && \
+    chown opam:opam /home/opam/.leoatprc
+ENTRYPOINT ["/usr/local/bin/leo"]

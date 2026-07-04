@@ -53,7 +53,10 @@ defmodule AtpBenchmarkRunner.LocalRunner do
         :unavailable
 
       %{docker_image: img} ->
-        case run_cmd("docker", ["images", "-q", img], []) do
+        # Strip default registry prefix — Docker Desktop stores images without it
+        query_tag = String.replace_prefix(img, "docker.io/", "")
+
+        case run_cmd("docker", ["images", "-q", query_tag], []) do
           {output, 0} ->
             if String.trim(output) == "" do
               if container.dockerfile_path do
@@ -126,7 +129,11 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     IO.puts("Building Docker image: #{tag} from #{dockerfile_path}")
 
     {output, exit_code} =
-      run_cmd("docker", ["build", "-t", tag, build_dir], Keyword.get(opts, :cmd_opts, []))
+      run_cmd(
+        "docker",
+        ["build", "-t", tag, "-f", abs_path, build_dir],
+        Keyword.get(opts, :cmd_opts, [])
+      )
 
     if exit_code != 0 do
       raise RuntimeError,
@@ -217,7 +224,14 @@ defmodule AtpBenchmarkRunner.LocalRunner do
         # Run all problems for one prover before switching to next prover
         # This reduces container loading times since each container starts once
         Enum.flat_map(provers, fn prover ->
-          Enum.map(problems, fn problem ->
+          compatible = filter_compatible_problems(prover, problems)
+
+          if compatible != problems do
+            skipped = length(problems) - length(compatible)
+            IO.puts("   ⚠ #{prover.name}: skipping #{skipped} problem(s) (incompatible logic)")
+          end
+
+          Enum.map(compatible, fn problem ->
             run_one(prover, problem, timeout_seconds, include_raw_output, verbose)
           end)
         end)
@@ -331,7 +345,9 @@ defmodule AtpBenchmarkRunner.LocalRunner do
             :unavailable
 
           true ->
-            case run_cmd("docker", ["images", "-q", img], []) do
+            query_tag = String.replace_prefix(img, "docker.io/", "")
+
+            case run_cmd("docker", ["images", "-q", query_tag], []) do
               {output, 0} ->
                 if String.trim(output) == "" do
                   if container.dockerfile_path, do: :needs_build, else: :needs_pull
@@ -732,4 +748,27 @@ defmodule AtpBenchmarkRunner.LocalRunner do
       %{prover: provider.prover(), container: provider.container()}
     end
   end
+
+  # --- Logic compatibility filtering ---
+
+  @doc """
+  Filters problems to only those whose logic (SPC prefix) is supported by the prover.
+
+  If the prover has no `:supported_logics` in its metadata, all problems pass through.
+  """
+  @spec filter_compatible_problems(Prover.t(), [Problem.t()]) :: [Problem.t()]
+  def filter_compatible_problems(
+        %Prover{metadata: %{supported_logics: logics}} = _prover,
+        problems
+      )
+      when is_list(logics) and logics != [] do
+    Enum.filter(problems, fn problem ->
+      prefix =
+        problem.logic |> to_string() |> String.split("_") |> List.first() |> String.downcase()
+
+      String.to_atom(prefix) in logics
+    end)
+  end
+
+  def filter_compatible_problems(_prover, problems), do: problems
 end

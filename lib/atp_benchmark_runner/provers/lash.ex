@@ -16,9 +16,11 @@ defmodule AtpBenchmarkRunner.Provers.Lash do
       kind: :apptainer,
       sif_name: "lash",
       executable: "lash",
-      command_template: "apptainer exec {sif_path} lash {problem}",
+      command_template:
+        "apptainer exec {sif_path} lash -M /opt/lash/modes -t {timeout_seconds} {problem}",
       metadata: %{
-        logics: ["higher-order fragments"],
+        logics: ["THF (typed higher-order only)"],
+        supported_logics: [:thf, :th0],
         integration: :cli,
         provider: __MODULE__,
         experimental?: true,

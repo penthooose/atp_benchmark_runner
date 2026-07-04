@@ -1,35 +1,55 @@
-# Lash container image (experimental, OCaml-based).
+# Lash container image (OCaml 4.12 opam-based build).
+# Uses the same ocaml/opam base + fixes as the Apptainer .def file.
 #   docker build -t docker.io/aise/atp-lash:latest priv/provers/lash/
 #   docker run --rm docker.io/aise/atp-lash:latest /problems/problem.p
-ARG LASH_URL=http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tar.gz
+ARG LASH_URL=http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz
 
-FROM docker.io/ubuntu:24.04 AS builder
+FROM docker.io/ocaml/opam:ubuntu-22.04-ocaml-4.12 AS builder
 ARG LASH_URL
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl build-essential make ocaml \
-    && rm -rf /var/lib/apt/lists/*
 
-# Always create a stub first, then try to overwrite with real binary
-RUN printf '#!/bin/sh\necho "Lash binary not available (source URL 404)." >&2\nexit 127\n' > /usr/local/bin/lash; \
-    chmod +x /usr/local/bin/lash
+USER root
+RUN apt-get update -qq && apt-get install -y -qq pkg-config m4 libpcre2-dev zlib1g-dev
 
+# Set up opam env
+ENV OPAMROOT=/home/opam/.opam
+RUN rm -f /usr/share/opam/sandbox.sh 2>/dev/null || true
+ENV OPAMYES=1
+
+# Download and extract Lash
 RUN mkdir -p /opt/lash && \
-    curl -fL "${LASH_URL}" -o /tmp/lash.tar.gz 2>/dev/null && \
-    tar -xzf /tmp/lash.tar.gz -C /opt/lash --strip-components=1 2>/dev/null || true
+    curl -fSL "${LASH_URL}" -o /tmp/lash.tar.gz && \
+    tar -xzf /tmp/lash.tar.gz -C /opt/lash --strip-components=1
 
-WORKDIR /opt/lash
-RUN if [ -f Makefile ] || [ -f makefile ]; then make 2>&1 || true; \
-    elif [ -f configure ]; then ./configure && make 2>&1 || true; fi
+WORKDIR /opt/lash/source
 
-RUN candidate="$(find /opt/lash -maxdepth 3 -type f \( -name 'lash' -o -name 'lash.opt' -o -name 'lash.byte' \) | head -1)"; \
-    if [ -n "$candidate" ]; then \
-    cp "$candidate" /usr/local/bin/lash; \
-    chmod +x /usr/local/bin/lash; \
-    echo "Lash built from source: $candidate"; \
-    else \
-    echo "Lash source not available, using stub"; \
-    fi
+# OCaml 4.12: caml_process_pending_signals renamed
+# C_INCLUDE_PATH for OCaml headers during C stub compilation
+ENV C_INCLUDE_PATH=/home/opam/.opam/4.12/lib/ocaml
+ENV CPLUS_INCLUDE_PATH=/home/opam/.opam/4.12/lib/ocaml
 
-FROM docker.io/ubuntu:24.04
+RUN eval $(opam env) && \
+    ./configure && \
+    SOLVER_CC="$(find /opt/lash -name 'Solver.cc' -type f 2>/dev/null | head -1)" && \
+    if [ -n "$SOLVER_CC" ]; then \
+    sed -i 's/caml_process_pending_signals\b/caml_process_pending_signals_exn/g' "$SOLVER_CC"; \
+    fi && \
+    OCAML_LIBDIR="$(ocamlc -where 2>/dev/null || echo /home/opam/.opam/4.12/lib/ocaml)" && \
+    if [ -f "$OCAML_LIBDIR/libasmrun.a" ]; then \
+    sed -i "s|-o lash|-o lash \"$OCAML_LIBDIR/libasmrun.a\"|" Makefile; \
+    fi && \
+    make -j$(nproc)
+
+RUN candidate="$(find /opt/lash -maxdepth 4 -type f \( -name 'lash' -o -name 'lash.opt' -o -name 'lash.byte' \) | head -1)"; \
+    if [ -z "$candidate" ]; then \
+    echo "Lash build failed" >&2; \
+    exit 1; \
+    fi; \
+    cp "$candidate" /usr/local/bin/lash
+
+FROM docker.io/ubuntu:22.04
+RUN apt-get update -qq && apt-get install -y -qq \
+    libgomp1 libpcre2-8-0 zlib1g libstdc++6 && \
+    rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/bin/lash /usr/local/bin/lash
+COPY --from=builder /opt/lash/modes /opt/lash/modes
 ENTRYPOINT ["lash"]
