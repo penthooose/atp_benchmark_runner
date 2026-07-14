@@ -119,7 +119,17 @@ end
 
 ## 5. Bootstrap an HPC benchmark plan
 
+Select the execution mode and resource strategy:
+
+| Mode                             | `hpc_mode`     | `single_node_mode` | Resource allocation                                                                                                  |
+| -------------------------------- | -------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Single-node sequential (default) | `:single_node` | `:sequential`      | All provers share 1 node (`--exclusive`). Tasks run one at a time; each gets the full node's CPUs and RAM.           |
+| Single-node parallel             | `:single_node` | `:parallel`        | All provers share 1 node (`--exclusive`). Tasks run concurrently (up to `max_parallel_jobs`); each gets a CPU share. |
+| Multi-node (prover per node)     | `:multi_node`  | —                  | Each prover gets its own exclusive node. One SLURM job per prover, each with `--nodes=1 --exclusive`.                |
+
 ```elixir
+# ── Single-node sequential (default) ──────────────────────────
+# All provers on one node, tasks one at a time, full resources each.
 plan =
 	AtpBenchmarkRunner.bootstrap(
 		session,
@@ -127,14 +137,51 @@ plan =
 		problems,
 		mode: :hpc,
 		hpc_mode: :single_node,
-		single_node_strategy: :direct_provers,
 		single_node_mode: :sequential,
 		timeout_seconds: 30,
 		wait_for_completion: false,
 		prepare_images: false
 	)
 
-IO.inspect(plan, label: "HPC benchmark plan", limit: :infinity)
+IO.inspect(plan, label: "Single-node sequential plan (default)", limit: :infinity)
+```
+
+```elixir
+# ── Single-node parallel ──────────────────────────────────────
+# All provers on one node, tasks run concurrently up to max_parallel_jobs.
+plan_parallel =
+	AtpBenchmarkRunner.bootstrap(
+		session,
+		selected_provers,
+		problems,
+		mode: :hpc,
+		hpc_mode: :single_node,
+		single_node_mode: :parallel,
+		max_parallel_jobs: 4,
+		timeout_seconds: 30,
+		wait_for_completion: false,
+		prepare_images: false
+	)
+
+IO.inspect(plan_parallel, label: "Single-node parallel plan", limit: :infinity)
+```
+
+```elixir
+# ── Multi-node ────────────────────────────────────────────────
+# Each prover gets its own exclusive node.
+plan_multi =
+	AtpBenchmarkRunner.bootstrap(
+		session,
+		selected_provers,
+		problems,
+		mode: :hpc,
+		hpc_mode: :multi_node,
+		timeout_seconds: 30,
+		wait_for_completion: false,
+		prepare_images: false
+	)
+
+IO.inspect(plan_multi, label: "Multi-node plan", limit: :infinity)
 ```
 
 If you want the runner itself to prepare missing prover images immediately

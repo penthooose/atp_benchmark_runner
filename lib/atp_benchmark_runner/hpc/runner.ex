@@ -235,11 +235,47 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
   end
 
   defp sync_problems(%Run{} = run, %HpcConnect.Session{} = session, hpc) do
+    # Pre-convert problems for provers that need it (CVC5 → SMT, Lash → THF)
+    # This must happen before syncing because the converted files need to be
+    # uploaded to the vault alongside the originals.
+    Enum.each(run.provers, fn prover ->
+      if prover.name == :cvc5 do
+        Enum.each(run.problems, fn problem ->
+          if local_file?(problem) and
+               (String.ends_with?(problem.path, ".p") or
+                  String.ends_with?(problem.path, ".tptp")) do
+            _ = AtpBenchmarkRunner.TPTPToSMT.convert_file!(problem.path)
+          end
+        end)
+      end
+
+      if prover.name == :lash do
+        Enum.each(run.problems, fn problem ->
+          if local_file?(problem) and
+               (String.ends_with?(problem.path, ".p") or
+                  String.ends_with?(problem.path, ".tptp")) do
+            _ =
+              AtpBenchmarkRunner.TPTP.ToTHF.ensure_thf(problem.path, :lash,
+                output_dir: Path.dirname(problem.path)
+              )
+          end
+        end)
+      end
+    end)
+
     remote_problems =
       TPTPSync.sync_problem_set!(session, run.problems, remote_tptp_dir: hpc.remote_tptp_dir)
 
     %{run | problems: remote_problems}
   end
+
+  defp local_file?(%Problem{source: :local}), do: true
+
+  defp local_file?(%Problem{path: path}) when is_binary(path) do
+    not String.starts_with?(path, "/")
+  end
+
+  defp local_file?(_), do: false
 
   defp wait_for_completion!(%HpcConnect.Session{} = session, %Run{} = run, hpc) do
     if hpc.wait_for_completion do

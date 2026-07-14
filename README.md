@@ -199,10 +199,53 @@ IO.puts(AtpBenchmarkRunner.diff_markdown(diff))
 
 Requires a configured `hpc_connect` session.
 
+### Execution modes
+
+Three HPC execution modes are available via the `bootstrap/4` call:
+
+| Mode                                 | `hpc_mode`     | `single_node_mode` | Resource allocation                                                                                     |
+| ------------------------------------ | -------------- | ------------------ | ------------------------------------------------------------------------------------------------------- |
+| **Single-node sequential** (default) | `:single_node` | `:sequential`      | All provers on 1 exclusive node. Tasks run one-at-a-time; each uses all node CPUs & RAM.                |
+| **Single-node parallel**             | `:single_node` | `:parallel`        | All provers on 1 exclusive node. Tasks run concurrently (≤ `max_parallel_jobs`); each gets a CPU share. |
+| **Multi-node**                       | `:multi_node`  | —                  | Each prover on its own exclusive node. Separate SLURM job per prover (`--nodes=1 --exclusive`).         |
+
+All modes use `--exclusive` by default—each job gets the full node without interference from other cluster jobs.
+
 ```elixir
 boot = HpcConnect.bootstrap(mode: :local, env_file: ".env")
 session = boot.session
 
+# ── Single-node sequential (default) ─────────────────────────
+plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
+  mode: :hpc,
+  hpc_mode: :single_node,
+  single_node_mode: :sequential,
+  timeout_seconds: 300
+)
+results = AtpBenchmarkRunner.run_benchmark(plan)
+
+# ── Single-node parallel ─────────────────────────────────────
+plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
+  mode: :hpc,
+  hpc_mode: :single_node,
+  single_node_mode: :parallel,
+  max_parallel_jobs: 4,
+  timeout_seconds: 300
+)
+results = AtpBenchmarkRunner.run_benchmark(plan)
+
+# ── Multi-node: each prover on its own node ──────────────────
+plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
+  mode: :hpc,
+  hpc_mode: :multi_node,
+  timeout_seconds: 300
+)
+results = AtpBenchmarkRunner.run_benchmark(plan)
+```
+
+### Low-level job submission (bypassing bootstrap/run_benchmark)
+
+```elixir
 run =
   AtpBenchmarkRunner.new_run(
     title: "THF smoke test",
@@ -256,17 +299,47 @@ and report rendering.
 
 ## HPC bootstrap modes
 
+### Single-node sequential (default)
+
+All provers on one exclusive node. Tasks run one at a time — each gets the
+full node's CPUs and RAM. Best for comparing a small number of provers
+without resource contention.
+
 ```elixir
-# Single-node: all provers on one compute node (job array)
 plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
   mode: :hpc,
-  hpc_mode: :single_node,  # default
+  hpc_mode: :single_node,
+  single_node_mode: :sequential,   # default
   timeout_seconds: 120
 )
+```
 
-# Multi-node: one prover per compute node
+### Single-node parallel
+
+All provers on one exclusive node. Tasks run concurrently up to
+`max_parallel_jobs`. Each gets a share of CPUs. Best for large problem
+sets where throughput matters more than per-problem peak resources.
+
+```elixir
 plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
   mode: :hpc,
-  hpc_mode: :multi_node
+  hpc_mode: :single_node,
+  single_node_mode: :parallel,
+  max_parallel_jobs: 4,
+  timeout_seconds: 120
+)
+```
+
+### Multi-node (prover per node)
+
+Each prover runs on its own exclusive node via separate SLURM jobs
+(`--nodes=1 --exclusive`). Best when provers need maximum resources
+and you have enough node-time quota.
+
+```elixir
+plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
+  mode: :hpc,
+  hpc_mode: :multi_node,
+  timeout_seconds: 120
 )
 ```

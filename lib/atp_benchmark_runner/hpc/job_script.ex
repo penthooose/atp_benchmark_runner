@@ -11,7 +11,7 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
   """
   @spec remote_paths(Run.t(), binary()) :: map()
   def remote_paths(%Run{} = run, remote_root) when is_binary(remote_root) do
-    run_dir = posix_join(remote_root, run.id)
+    run_dir = posix_join(posix_join(remote_root, "run_results"), run.id)
 
     %{
       run_dir: run_dir,
@@ -152,22 +152,39 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     run.provers
     |> Enum.flat_map(fn %Prover{} = prover ->
       cvc5? = prover.name == :cvc5
+      lash? = prover.name == :lash
 
       Enum.map(run.problems, fn problem ->
         command = runtime_command(prover, run.problem_timeout_seconds, opts)
 
         problem_path =
-          if cvc5? do
-            raw = problem.path || problem.name
+          cond do
+            cvc5? ->
+              raw = problem.path || problem.name
 
-            if String.ends_with?(raw, ".p") || String.ends_with?(raw, ".tptp") do
-              smt_path = convert_problem_to_smt(raw)
-              smt_path
-            else
-              raw
-            end
-          else
-            problem.path || problem.name
+              if String.ends_with?(raw, ".p") || String.ends_with?(raw, ".tptp") do
+                # The .smt2 conversion was done locally and synced to the vault
+                # before single_node_tasks is called — no local read needed.
+                String.replace_suffix(raw, ".p", ".smt2")
+                |> String.replace_suffix(".tptp", ".smt2")
+              else
+                raw
+              end
+
+            lash? ->
+              raw = problem.path || problem.name
+
+              if String.ends_with?(raw, ".p") || String.ends_with?(raw, ".tptp") do
+                # The _thf.p conversion was done locally and synced to the vault
+                # before single_node_tasks is called.
+                String.replace_suffix(raw, ".p", "_thf.p")
+                |> String.replace_suffix(".tptp", "_thf.p")
+              else
+                raw
+              end
+
+            true ->
+              problem.path || problem.name
           end
 
         [

@@ -28,7 +28,10 @@ defmodule AtpBenchmarkRunner.HPC.Config do
     prover_count = max(int_from_opt(opts, :prover_count) || 0, 1)
 
     single_node_mode =
-      atom_value(opts, :single_node_mode, "SINGLE_NODE_MODE", :parallel, [:parallel, :sequential])
+      atom_value(opts, :single_node_mode, "SINGLE_NODE_MODE", :sequential, [
+        :parallel,
+        :sequential
+      ])
 
     %{
       cluster: atom_or_string_value(opts, :cluster, "CLUSTER", session.cluster.name),
@@ -47,18 +50,24 @@ defmodule AtpBenchmarkRunner.HPC.Config do
       walltime: string_value(opts, :walltime, "WALLTIME", "02:00:00"),
       max_parallel_jobs: max_parallel_jobs,
       cpus_per_task:
-        int_value(
+        optional_int_value(
           opts,
           :cpus_per_task,
           "CPUS_PER_TASK",
           default_cpus(hpc_mode, single_node_mode, max_parallel_jobs, prover_count)
         ),
       ntasks: int_value(opts, :ntasks, "NTASKS", 1),
-      nodes: int_value(opts, :nodes, "NODES", 1),
+      nodes: int_value(opts, :nodes, "NODES", default_nodes(hpc_mode)),
       gres: optional_string_value(opts, :gres, "GRES"),
       constraint: optional_string_value(opts, :constraint, "CONSTRAINT"),
       mem: optional_string_value(opts, :mem, "MEM"),
-      exclusive: bool_value(opts, :exclusive, "EXCLUSIVE", false),
+      exclusive:
+        bool_value(
+          opts,
+          :exclusive,
+          "EXCLUSIVE",
+          default_exclusive(hpc_mode, single_node_mode)
+        ),
       prepare_images: bool_value(opts, :prepare_images, "PREPARE_IMAGES", false),
       wait_for_completion: bool_value(opts, :wait_for_completion, "WAIT_FOR_COMPLETION", true),
       poll_interval_ms: int_value(opts, :poll_interval_ms, "POLL_INTERVAL_MS", 10_000),
@@ -69,14 +78,14 @@ defmodule AtpBenchmarkRunner.HPC.Config do
           opts,
           :remote_root,
           "REMOTE_ROOT",
-          posix_join(session.work_dir, "atp_benchmark_runner")
+          posix_join(session.vault_dir || session.work_dir, "atp_benchmark_runner")
         ),
       remote_tptp_dir:
         string_value(
           opts,
           :remote_tptp_dir,
           "REMOTE_TPTP_DIR",
-          posix_join(session.vault_dir || session.work_dir, "atp_benchmark_runner/tptp")
+          posix_join(session.vault_dir || session.work_dir, "tptp")
         )
     }
   end
@@ -89,11 +98,33 @@ defmodule AtpBenchmarkRunner.HPC.Config do
 
   def terminal_state?(_), do: false
 
-  defp default_cpus(:single_node, :parallel, max_parallel_jobs, _prover_count),
-    do: max(max_parallel_jobs, 1)
+  # Single-node sequential: tasks run one at a time, each gets all available CPUs.
+  # Return nil so no --cpus-per-task is set; --exclusive gives the full node.
+  defp default_cpus(:single_node, :sequential, _max_parallel_jobs, _prover_count), do: nil
 
-  defp default_cpus(:single_node, :sequential, _max_parallel_jobs, _prover_count), do: 1
-  defp default_cpus(:multi_node, _single_node_mode, _max_parallel_jobs, _prover_count), do: 1
+  # Single-node parallel: tasks may run concurrently.  Each prover process
+  # runs with OMP_NUM_THREADS=1 so 1 CPU per task is sufficient; --exclusive
+  # ensures the full node is allocated and SLURM manages the sharing.
+  # Dynamic CPU division (point 4) will refine this later.
+  defp default_cpus(:single_node, :parallel, _max_parallel_jobs, _prover_count), do: 1
+
+  # Multi-node: each prover gets its own exclusive node, no cpus-per-task limit.
+  defp default_cpus(:multi_node, _single_node_mode, _max_parallel_jobs, _prover_count), do: nil
+
+  # Single-node: 1 node shared by all provers.
+  defp default_nodes(:single_node), do: 1
+
+  # Multi-node: 1 node per prover — each job gets its own node.
+  defp default_nodes(:multi_node), do: 1
+
+  # Single-node sequential: exclusive access to maximise throughput per task.
+  defp default_exclusive(:single_node, :sequential), do: true
+
+  # Single-node parallel: exclusive to avoid interference from other cluster jobs.
+  defp default_exclusive(:single_node, :parallel), do: true
+
+  # Multi-node: each prover runs alone on its node.
+  defp default_exclusive(:multi_node, _single_node_mode), do: true
 
   defp atom_value(opts, key, env_suffix, default, allowed) do
     value = Keyword.get(opts, key) || env_value(env_suffix, opts)
@@ -132,6 +163,14 @@ defmodule AtpBenchmarkRunner.HPC.Config do
   end
 
   defp int_value(opts, key, env_suffix, default) do
+    case int_from_opt(opts, key) || parse_int(env_value(env_suffix, opts)) do
+      nil -> default
+      value -> max(value, 1)
+    end
+  end
+
+  # Like int_value/4 but allows nil (no limit) as a valid default.
+  defp optional_int_value(opts, key, env_suffix, default) do
     case int_from_opt(opts, key) || parse_int(env_value(env_suffix, opts)) do
       nil -> default
       value -> max(value, 1)

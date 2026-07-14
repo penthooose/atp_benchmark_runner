@@ -76,10 +76,15 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
         remote_path = remote_problem_path(problem, root)
         RemoteFiles.mkdir_p!(session, posix_dirname(remote_path), opts)
 
+        # Upload the original problem file
         HpcConnect.SSH.upload!(session, problem.path, remote_path,
           normalize_line_endings: :lf,
           normalize_extensions: [".p", ".ax"]
         )
+
+        # Also upload converted versions needed by specific provers
+        upload_converted!(session, problem.path, remote_path, ".smt2", opts)
+        upload_thf_converted!(session, problem.path, remote_path, opts)
 
         mark_synced(problem, remote_path)
 
@@ -88,6 +93,46 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
 
       true ->
         problem
+    end
+  end
+
+  # Upload a .smt2 conversion if it exists (generated for CVC5)
+  defp upload_converted!(session, local_path, remote_path, ext, _opts) do
+    converted =
+      local_path
+      |> String.replace_suffix(".p", ext)
+      |> String.replace_suffix(".tptp", ext)
+
+    if File.exists?(converted) do
+      remote_converted =
+        remote_path
+        |> String.replace_suffix(".p", ext)
+        |> String.replace_suffix(".tptp", ext)
+
+      HpcConnect.SSH.upload!(session, converted, remote_converted,
+        normalize_line_endings: :lf,
+        normalize_extensions: [ext]
+      )
+    end
+  end
+
+  # Upload a _thf.p converted file if it exists (generated for Lash)
+  defp upload_thf_converted!(session, local_path, remote_path, _opts) do
+    thf_local =
+      local_path
+      |> String.replace_suffix(".p", "_thf.p")
+      |> String.replace_suffix(".tptp", "_thf.p")
+
+    if File.exists?(thf_local) do
+      thf_remote =
+        remote_path
+        |> String.replace_suffix(".p", "_thf.p")
+        |> String.replace_suffix(".tptp", "_thf.p")
+
+      HpcConnect.SSH.upload!(session, thf_local, thf_remote,
+        normalize_line_endings: :lf,
+        normalize_extensions: [".p"]
+      )
     end
   end
 

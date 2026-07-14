@@ -7,6 +7,8 @@ defmodule AtpBenchmarkRunner.HPC.Images do
   submission can remain fast and predictable.
   """
 
+  require Logger
+
   alias AtpBenchmarkRunner.{Prover, Provers}
   alias AtpBenchmarkRunner.Prover.Container
 
@@ -146,16 +148,71 @@ defmodule AtpBenchmarkRunner.HPC.Images do
   end
 
   @doc """
+  Fast batch check: lists all existing `.sif` files in the `singularity_images/`
+  directory with a single SSH call. Returns a `MapSet` of SIF stem names (without
+  extension) that already exist remotely.
+
+  This avoids the ~40s overhead of running `HpcConnect.build_sif/2` per prover
+  just to check existence.
+  """
+  @spec existing_sif_names(HpcConnect.Session.t()) :: MapSet.t()
+  def existing_sif_names(%HpcConnect.Session{} = session) do
+    images_dir = Path.join(session.work_dir, "singularity_images")
+    glob = Path.join(images_dir, "*.sif")
+
+    session
+    |> HpcConnect.list_remote_files(glob)
+    |> Enum.map(fn name -> String.replace_suffix(name, ".sif", "") end)
+    |> MapSet.new()
+  end
+
+  @doc """
+  Fast batch existence check: given a session and a list of provers, returns
+  the provers whose SIF images are **missing** from `singularity_images/`.
+
+  Uses `existing_sif_names/1` (one SSH call) instead of N individual checks.
+  """
+  @spec missing_provers(HpcConnect.Session.t(), [Prover.t()]) :: [Prover.t()]
+  def missing_provers(%HpcConnect.Session{} = session, provers) when is_list(provers) do
+    existing = existing_sif_names(session)
+
+    Enum.reject(provers, fn prover ->
+      stem = remote_image_name(prover)
+      MapSet.member?(existing, stem)
+    end)
+  end
+
+  @doc """
   Ensures all prover images for a run are available.
 
-  By default this only returns the expected remote paths. Pass `build: true` to
-  call `HpcConnect.build_sif/3` for each image.
+  When `build: true`, uses a fast batch `ls` check first to see which SIFs
+  already exist, then only calls `HpcConnect.build_sif/2` for missing ones.
   """
   @spec ensure_for_run!(HpcConnect.Session.t(), [Prover.t()], keyword()) :: map()
   def ensure_for_run!(%HpcConnect.Session{} = session, provers, opts \\ [])
       when is_list(provers) do
     if Keyword.get(opts, :build, false) do
-      build_all!(session, provers, opts)
+      missing = missing_provers(session, provers)
+
+      if missing == [] do
+        Logger.info(
+          "[Images] All #{length(provers)} prover SIFs already exist remote — skip build"
+        )
+
+        Map.new(provers, fn prover -> {prover.name, remote_sif_path(session, prover)} end)
+      else
+        present = provers -- missing
+
+        Logger.info(
+          "[Images] #{length(missing)}/#{length(provers)} prover SIFs missing: " <>
+            "#{inspect(Enum.map(missing, & &1.name))} — building those"
+        )
+
+        build_all!(session, missing, opts)
+        |> Map.merge(
+          Map.new(present, fn prover -> {prover.name, remote_sif_path(session, prover)} end)
+        )
+      end
     else
       Map.new(provers, fn prover -> {prover.name, remote_sif_path(session, prover)} end)
     end
