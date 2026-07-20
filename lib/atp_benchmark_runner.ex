@@ -299,6 +299,10 @@ defmodule AtpBenchmarkRunner do
     * `:timeout_seconds` — per-problem limit (default: 60)
     * `:include_raw_output` — include full stdout (default: false)
     * `:auto_ensure_images` — pull/build missing images (default: false)
+    * `:node_size` — CPU node allocation: `:full` (default) or `:half`
+      * `:full` — `--exclusive` with all CPUs on the node
+      * `:half` — no `--exclusive`, requests half the node's CPUs
+      * CPU counts are auto-detected per cluster (Helma: 384/192, Fritz: 72/36, spr*: 104/52)
   """
   @spec bootstrap(
           HpcConnect.Session.t() | [Prover.t() | atom() | binary()],
@@ -335,9 +339,25 @@ defmodule AtpBenchmarkRunner do
   @doc """
   Creates a benchmark plan for HPC execution with a session.
 
+  Available HPC options (passed in the keyword list):
+
+    * `:hpc_mode` — `:single_node` (default) or `:multi_node`
+    * `:single_node_mode` — `:sequential` (default) or `:parallel`
+    * `:node_size` — `:full` (default) or `:half`
+      * Controls CPU allocation on the target cluster
+      * `:full` → `--exclusive` with all node CPUs
+      * `:half` → no `--exclusive`, half the node's CPUs
+      * Auto-detected per cluster (Helma: 384/192, Fritz: 72/36, spr*: 104/52)
+    * `:timeout_seconds` — per-problem limit (default: 60)
+    * `:partition` — SLURM partition (default: "cpu")
+    * `:max_parallel_jobs` — max concurrent tasks (default: 4)
+    * `:wait_for_completion` — poll until done (default: true)
+    * `:prepare_images` — auto-build missing SIF images (default: false)
+
       plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
                mode: :hpc,
-               hpc_mode: :multi_node
+               hpc_mode: :multi_node,
+               node_size: :half
              )
       results = AtpBenchmarkRunner.run_benchmark(plan)
   """

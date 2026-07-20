@@ -143,6 +143,10 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
         remote_root: hpc.remote_root
       )
 
+    # Auto-kill: explicitly cancel job arrays so SLURM releases resources
+    # immediately, even for jobs that already reached a terminal state.
+    Submitter.cancel_run(session, submitted_run)
+
     %{
       results: results,
       job_ids: submitted_run.submitted_jobs,
@@ -211,6 +215,9 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
         include_raw_output: hpc.include_raw_output,
         remote_root: hpc.remote_root
       )
+
+    # Auto-kill: explicitly cancel the job so SLURM releases the node.
+    Submitter.cancel_run(session, submitted_run)
 
     %{
       results: results,

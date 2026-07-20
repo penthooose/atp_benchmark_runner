@@ -199,27 +199,55 @@ IO.puts(AtpBenchmarkRunner.diff_markdown(diff))
 
 Requires a configured `hpc_connect` session.
 
+### Node size
+
+The `:node_size` option controls how many CPUs of a cluster node are requested:
+
+| Value   | `--exclusive` | CPUs per task                 | Use case                              |
+| ------- | ------------- | ----------------------------- | ------------------------------------- |
+| `:full` | Yes           | All node CPUs (auto-detected) | Maximise per-prover throughput        |
+| `:half` | No            | Half the node's CPUs          | Share node with other jobs; efficient |
+
+CPU counts are auto-detected per cluster and partition:
+
+| Cluster | Partition  | `:full` CPUs | `:half` CPUs |
+| ------- | ---------- | ------------ | ------------ |
+| Helma   | `cpu`      | 384          | 192          |
+| Fritz   | singlenode | 72           | 36           |
+| Fritz   | spr1tb     | 104          | 52           |
+| Fritz   | spr2tb     | 104          | 52           |
+
+Override any derived value explicitly via `:cpus_per_task` or `:exclusive` in bootstrap opts.
+
 ### Execution modes
 
 Three HPC execution modes are available via the `bootstrap/4` call:
 
-| Mode                                 | `hpc_mode`     | `single_node_mode` | Resource allocation                                                                                     |
-| ------------------------------------ | -------------- | ------------------ | ------------------------------------------------------------------------------------------------------- |
-| **Single-node sequential** (default) | `:single_node` | `:sequential`      | All provers on 1 exclusive node. Tasks run one-at-a-time; each uses all node CPUs & RAM.                |
-| **Single-node parallel**             | `:single_node` | `:parallel`        | All provers on 1 exclusive node. Tasks run concurrently (≤ `max_parallel_jobs`); each gets a CPU share. |
-| **Multi-node**                       | `:multi_node`  | —                  | Each prover on its own exclusive node. Separate SLURM job per prover (`--nodes=1 --exclusive`).         |
-
-All modes use `--exclusive` by default—each job gets the full node without interference from other cluster jobs.
+| Mode                                 | `hpc_mode`     | `single_node_mode` | Resource allocation                                                                                         |
+| ------------------------------------ | -------------- | ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| **Single-node sequential** (default) | `:single_node` | `:sequential`      | All provers on 1 node. Tasks run one-at-a-time; each gets the node's CPUs (`:full` or `:half`).             |
+| **Single-node parallel**             | `:single_node` | `:parallel`        | All provers on 1 node. Tasks run concurrently (≤ `max_parallel_jobs`); each gets a share (`:full`/`:half`). |
+| **Multi-node**                       | `:multi_node`  | —                  | Each prover on its own node. Separate SLURM job per prover.                                                 |
 
 ```elixir
 boot = HpcConnect.bootstrap(mode: :local, env_file: ".env")
 session = boot.session
 
-# ── Single-node sequential (default) ─────────────────────────
+# ── Single-node sequential, full node (default) ──────────────
 plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
   mode: :hpc,
   hpc_mode: :single_node,
   single_node_mode: :sequential,
+  timeout_seconds: 300
+)
+results = AtpBenchmarkRunner.run_benchmark(plan)
+
+# ── Single-node sequential, half node ────────────────────────
+plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
+  mode: :hpc,
+  hpc_mode: :single_node,
+  single_node_mode: :sequential,
+  node_size: :half,
   timeout_seconds: 300
 )
 results = AtpBenchmarkRunner.run_benchmark(plan)
@@ -299,32 +327,51 @@ and report rendering.
 
 ## HPC bootstrap modes
 
+### Node size (`:node_size`)
+
+Controls how many CPUs are requested per cluster node. Auto-detected per cluster
+and partition; can be overridden explicitly.
+
+| Value   | `--exclusive` | Helma CPU | Fritz singlenode | Fritz spr\* |
+| ------- | ------------- | --------- | ---------------- | ----------- |
+| `:full` | Yes           | 384 CPUs  | 72 CPUs          | 104 CPUs    |
+| `:half` | No            | 192 CPUs  | 36 CPUs          | 52 CPUs     |
+
 ### Single-node sequential (default)
 
-All provers on one exclusive node. Tasks run one at a time — each gets the
-full node's CPUs and RAM. Best for comparing a small number of provers
-without resource contention.
+All provers on one node. Tasks run one at a time — each gets the node's CPUs
+(controlled by `node_size`). Best for comparing a small number of provers.
 
 ```elixir
+# Full node (default)
 plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
   mode: :hpc,
   hpc_mode: :single_node,
-  single_node_mode: :sequential,   # default
+  single_node_mode: :sequential,
+  timeout_seconds: 120
+)
+
+# Half node — share cluster node with other jobs
+plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
+  mode: :hpc,
+  hpc_mode: :single_node,
+  single_node_mode: :sequential,
+  node_size: :half,
   timeout_seconds: 120
 )
 ```
 
 ### Single-node parallel
 
-All provers on one exclusive node. Tasks run concurrently up to
-`max_parallel_jobs`. Each gets a share of CPUs. Best for large problem
-sets where throughput matters more than per-problem peak resources.
+All provers on one node. Tasks run concurrently up to `max_parallel_jobs`.
+Each gets a share of CPUs. Best for large problem sets.
 
 ```elixir
 plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
   mode: :hpc,
   hpc_mode: :single_node,
   single_node_mode: :parallel,
+  node_size: :full,
   max_parallel_jobs: 4,
   timeout_seconds: 120
 )
@@ -332,9 +379,8 @@ plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
 
 ### Multi-node (prover per node)
 
-Each prover runs on its own exclusive node via separate SLURM jobs
-(`--nodes=1 --exclusive`). Best when provers need maximum resources
-and you have enough node-time quota.
+Each prover runs on its own node via separate SLURM jobs.
+`node_size` controls whether each prover gets a full or half node.
 
 ```elixir
 plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,

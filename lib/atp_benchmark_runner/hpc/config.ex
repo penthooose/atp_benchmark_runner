@@ -33,10 +33,42 @@ defmodule AtpBenchmarkRunner.HPC.Config do
         :sequential
       ])
 
+    node_size =
+      atom_value(
+        opts,
+        :node_size,
+        "NODE_SIZE",
+        cluster_default_node_size(session.cluster.name),
+        [:full, :half]
+      )
+
+    partition = string_value(opts, :partition, "PARTITION", "cpu")
+    total_cpus = __MODULE__.node_total_cpus(session.cluster.name, partition)
+
+    # Dynamic resource probe (SSH) — opt-in via :dynamic_resources or env var.
+    dynamic_resources =
+      bool_value(opts, :dynamic_resources, "DYNAMIC_RESOURCES", false)
+
+    resources =
+      if dynamic_resources do
+        AtpBenchmarkRunner.HPC.NodeResources.probe(session,
+          partition: partition,
+          dynamic_resources: true,
+          connect_opts: Keyword.get(opts, :connect_opts, [])
+        )
+      else
+        %{cpus: total_cpus, ram_mb: total_cpus * 1_900}
+      end
+
+    total_ram_mb = resources.ram_mb
+
     %{
       cluster: atom_or_string_value(opts, :cluster, "CLUSTER", session.cluster.name),
       node_kind: string_value(opts, :node_kind, "NODE_KIND", "cpu"),
-      partition: string_value(opts, :partition, "PARTITION", "cpu"),
+      partition: partition,
+      node_size: node_size,
+      total_cpus: resources.cpus,
+      total_ram_mb: total_ram_mb,
       hpc_mode: hpc_mode,
       single_node_mode: single_node_mode,
       single_node_strategy:
@@ -54,19 +86,39 @@ defmodule AtpBenchmarkRunner.HPC.Config do
           opts,
           :cpus_per_task,
           "CPUS_PER_TASK",
-          default_cpus(hpc_mode, single_node_mode, max_parallel_jobs, prover_count)
+          default_cpus(
+            hpc_mode,
+            single_node_mode,
+            max_parallel_jobs,
+            prover_count,
+            node_size,
+            resources.cpus
+          )
         ),
       ntasks: int_value(opts, :ntasks, "NTASKS", 1),
-      nodes: int_value(opts, :nodes, "NODES", default_nodes(hpc_mode)),
+      nodes: optional_int_value(opts, :nodes, "NODES", default_nodes(hpc_mode)),
       gres: optional_string_value(opts, :gres, "GRES"),
       constraint: optional_string_value(opts, :constraint, "CONSTRAINT"),
-      mem: optional_string_value(opts, :mem, "MEM"),
+      mem:
+        optional_string_value(
+          opts,
+          :mem,
+          "MEM",
+          default_mem(
+            hpc_mode,
+            single_node_mode,
+            max_parallel_jobs,
+            prover_count,
+            node_size,
+            resources.ram_mb
+          )
+        ) || nil,
       exclusive:
         bool_value(
           opts,
           :exclusive,
           "EXCLUSIVE",
-          default_exclusive(hpc_mode, single_node_mode)
+          default_exclusive(hpc_mode, single_node_mode, node_size)
         ),
       prepare_images: bool_value(opts, :prepare_images, "PREPARE_IMAGES", false),
       wait_for_completion: bool_value(opts, :wait_for_completion, "WAIT_FOR_COMPLETION", true),
@@ -98,33 +150,91 @@ defmodule AtpBenchmarkRunner.HPC.Config do
 
   def terminal_state?(_), do: false
 
-  # Single-node sequential: tasks run one at a time, each gets all available CPUs.
-  # Return nil so no --cpus-per-task is set; --exclusive gives the full node.
-  defp default_cpus(:single_node, :sequential, _max_parallel_jobs, _prover_count), do: nil
+  # ── default_cpus ──────────────────────────────────────────────────────────
+  # Full node, sequential: --exclusive gives all CPUs, no explicit limit needed.
+  defp default_cpus(:single_node, :sequential, _max_parallel, _prover_count, :full, _total),
+    do: nil
 
-  # Single-node parallel: tasks may run concurrently.  Each prover process
-  # runs with OMP_NUM_THREADS=1 so 1 CPU per task is sufficient; --exclusive
-  # ensures the full node is allocated and SLURM manages the sharing.
-  # Dynamic CPU division (point 4) will refine this later.
-  defp default_cpus(:single_node, :parallel, _max_parallel_jobs, _prover_count), do: 1
+  # Full node, parallel: 1 CPU per task (OMP_NUM_THREADS=1), --exclusive gives the node.
+  defp default_cpus(:single_node, :parallel, _max_parallel, _prover_count, :full, _total), do: 1
 
-  # Multi-node: each prover gets its own exclusive node, no cpus-per-task limit.
-  defp default_cpus(:multi_node, _single_node_mode, _max_parallel_jobs, _prover_count), do: nil
+  # Half node, sequential: one task uses half the node's CPUs.
+  defp default_cpus(:single_node, :sequential, _max_parallel, _prover_count, :half, total),
+    do: half_cpus(total)
 
-  # Single-node: 1 node shared by all provers.
-  defp default_nodes(:single_node), do: 1
+  # Half node, parallel: spread half the CPUs across concurrent tasks.
+  defp default_cpus(:single_node, :parallel, max_parallel, _prover_count, :half, total) do
+    max(div(half_cpus(total), max(max_parallel, 1)), 1)
+  end
 
-  # Multi-node: 1 node per prover — each job gets its own node.
-  defp default_nodes(:multi_node), do: 1
+  # Multi-node, full: prover gets its own exclusive node.
+  defp default_cpus(:multi_node, _mode, _max_parallel, _prover_count, :full, _total), do: nil
 
-  # Single-node sequential: exclusive access to maximise throughput per task.
-  defp default_exclusive(:single_node, :sequential), do: true
+  # Multi-node, half: each prover uses half a node's CPUs.
+  defp default_cpus(:multi_node, _mode, _max_parallel, _prover_count, :half, total),
+    do: half_cpus(total)
 
-  # Single-node parallel: exclusive to avoid interference from other cluster jobs.
-  defp default_exclusive(:single_node, :parallel), do: true
+  # ── default_mem ───────────────────────────────────────────────────────────
+  # Mirror of default_cpus/6 but returns MB as a SLURM --mem string.
+  # Returns nil when --exclusive gives the full node (no explicit --mem needed).
 
-  # Multi-node: each prover runs alone on its node.
-  defp default_exclusive(:multi_node, _single_node_mode), do: true
+  defp default_mem(:single_node, :sequential, _max_parallel, _prover_count, :full, _ram),
+    do: nil
+
+  defp default_mem(:single_node, :parallel, max_parallel, _prover_count, :full, ram) do
+    "#{max(div(ram, max(max_parallel, 1)), 1)}M"
+  end
+
+  defp default_mem(:single_node, :sequential, _max_parallel, _prover_count, :half, ram) do
+    "#{half_cpus(ram)}M"
+  end
+
+  defp default_mem(:single_node, :parallel, max_parallel, _prover_count, :half, ram) do
+    "#{max(div(half_cpus(ram), max(max_parallel, 1)), 1)}M"
+  end
+
+  defp default_mem(:multi_node, _mode, _max_parallel, _prover_count, :full, _ram), do: nil
+
+  defp default_mem(:multi_node, _mode, _max_parallel, _prover_count, :half, ram),
+    do: "#{half_cpus(ram)}M"
+
+  # ── default_nodes ─────────────────────────────────────────────────────────
+  # No explicit --nodes; SLURM auto-determines nodes from --cpus-per-task.
+  # See sbatch.interactive.helma_cpu and sbatch.interactive.fritz_cpu.
+  defp default_nodes(_mode), do: nil
+
+  # ── default_exclusive ─────────────────────────────────────────────────────
+  # Full node: always exclusive — we want the entire node.
+  defp default_exclusive(_mode, _seq_or_par, :full), do: true
+
+  # Half node: share the node with other jobs.
+  defp default_exclusive(_mode, _seq_or_par, :half), do: false
+
+  # ── cluster_default_node_size ─────────────────────────────────────────────
+  # Default to half nodes for efficient cluster use; users can override.
+  defp cluster_default_node_size(_cluster), do: :full
+
+  # ── node_total_cpus (public for NodeResources fallback) ──────────────────
+  # Helma CPU partition: 2 × AMD Turin ("Zen5c"), 192 cores each = 384 total.
+  def node_total_cpus(:helma, "cpu"), do: 384
+  def node_total_cpus(:helma, _partition), do: 384
+
+  # Fritz Ice Lake nodes (singlenode / multinode): 2 × 36 cores = 72 total.
+  def node_total_cpus(:fritz, "singlenode"), do: 72
+  def node_total_cpus(:fritz, "multinode"), do: 72
+
+  # Fritz Sapphire Rapids nodes (spr1tb / spr2tb): 2 × 52 cores = 104 total.
+  def node_total_cpus(:fritz, "spr1tb"), do: 104
+  def node_total_cpus(:fritz, "spr2tb"), do: 104
+
+  # Fritz fallback (default partition is singlenode).
+  def node_total_cpus(:fritz, _partition), do: 72
+
+  # Unknown cluster: conservative fallback.
+  def node_total_cpus(_cluster, _partition), do: 128
+
+  # ── helpers ───────────────────────────────────────────────────────────────
+  defp half_cpus(total), do: max(div(total, 2), 1)
 
   defp atom_value(opts, key, env_suffix, default, allowed) do
     value = Keyword.get(opts, key) || env_value(env_suffix, opts)
@@ -147,10 +257,10 @@ defmodule AtpBenchmarkRunner.HPC.Config do
     end
   end
 
-  defp optional_string_value(opts, key, env_suffix) do
+  defp optional_string_value(opts, key, env_suffix, default \\ nil) do
     case Keyword.get(opts, key) || env_value(env_suffix, opts) do
-      nil -> nil
-      "" -> nil
+      nil -> default
+      "" -> default
       value -> to_string(value)
     end
   end

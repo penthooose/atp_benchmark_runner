@@ -275,7 +275,8 @@ defmodule AtpBenchmarkRunnerTest do
         hpc_mode: :single_node,
         single_node_mode: :sequential,
         cpus_per_task: 2,
-        max_parallel_jobs: 2
+        max_parallel_jobs: 2,
+        exclusive: true
       )
 
     assert plan.cluster == :helma
@@ -283,6 +284,10 @@ defmodule AtpBenchmarkRunnerTest do
     assert plan.max_parallel_jobs == 2
     assert plan.metadata.hpc.hpc_mode == :single_node
     assert plan.metadata.hpc.single_node_mode == :sequential
+    assert plan.metadata.hpc.node_size == :full
+    assert plan.metadata.hpc.total_cpus == 384
+    assert plan.metadata.hpc.total_ram_mb == 384 * 1900
+    assert plan.metadata.hpc.exclusive == true
     assert plan.metadata.session_config.cluster == :helma
     refute Map.has_key?(plan.metadata, :session)
   end
