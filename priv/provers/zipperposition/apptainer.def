@@ -34,18 +34,33 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     opam install -y zipperposition 2>&1 || \
       opam install -y zipperposition.2.0 2>&1 || \
       echo "WARNING: Could not install zipperposition via opam" >&2
-  # Search for the binary (check both possible opam roots)
+    # Search for the binary (check both possible opam roots).
+    # -maxdepth 4 misses /home/opam/.opam/4.12/bin/zipperposition (depth 5),
+    # so use -maxdepth 5 or just search without depth limit.
     found=""
     for dir in /home/opam/.opam /root/.opam; do
-      found="$(find "$dir" -maxdepth 4 -type f -name zipperposition 2>/dev/null | head -1)"
+      found="$(find "$dir" -maxdepth 5 -type f -name zipperposition 2>/dev/null | head -1)"
       if [ -n "$found" ]; then break; fi
     done
     if [ -n "$found" ]; then
       ln -sf "$found" /usr/local/bin/zipperposition
+      echo "Linked zipperposition from $found"
     else
       echo "WARNING: zipperposition binary not found after opam install" >&2
+      # Fallback: try the known installed location directly
+      for dir in /home/opam/.opam /root/.opam; do
+        candidate="$dir/4.12/bin/zipperposition"
+        if [ -f "$candidate" ]; then
+          ln -sf "$candidate" /usr/local/bin/zipperposition
+          echo "Linked zipperposition from fallback path $candidate"
+          found="$candidate"
+          break
+        fi
+      done
     fi
-    /usr/local/bin/zipperposition --help >/dev/null 2>&1 || true
+    if [ -n "$found" ]; then
+      /usr/local/bin/zipperposition --help >/dev/null 2>&1 && echo "zipperposition --help: OK" || true
+    fi
 
 %environment
     export OPAMROOT=/home/opam/.opam

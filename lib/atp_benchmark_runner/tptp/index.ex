@@ -46,8 +46,17 @@ defmodule AtpBenchmarkRunner.TPTP.Index do
     |> patterns(include_axioms?)
     |> Enum.flat_map(&Path.wildcard/1)
     |> Enum.uniq()
+    |> Enum.reject(&ignore_file?/1)
     |> Enum.filter(&path_selected?(&1, opts))
     |> Enum.sort()
+  end
+
+  # Exclude generated derivative files that are not original TPTP problems:
+  #   _thf.p   → Lash THF conversion output (generated during pre-convert)
+  #   .smt2    → CVC5 SMT conversion output (generated during pre-convert)
+  defp ignore_file?(path) do
+    basename = Path.basename(path)
+    String.ends_with?(basename, "_thf.p") or String.ends_with?(basename, ".smt2")
   end
 
   @doc """

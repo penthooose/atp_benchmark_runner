@@ -54,6 +54,7 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     prover_name = Atom.to_string(prover.name)
     prover_results = posix_join(paths.results_dir, prover_name)
     command = runtime_command(prover, run.problem_timeout_seconds, opts)
+    diag = diagnostic_snippet(opts)
 
     """
     #!/bin/bash -l
@@ -86,6 +87,8 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     export GOMP_SPINCOUNT=0
     export MKL_CBWR=AUTO
 
+    #{diag}
+
     PROVER=#{Shell.quote(prover_name)}
     PROBLEM_FILE=#{Shell.quote(paths.problem_list)}
     RESULT_DIR=#{Shell.quote(prover_results)}
@@ -103,29 +106,32 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     PROBLEM_ID="${PROBLEM_BASENAME%.*}"
     OUT_FILE="$RESULT_DIR/${PROBLEM_ID}.out"
     META_FILE="$RESULT_DIR/${PROBLEM_ID}.meta.json"
-    RESOURCE_FILE="$RESULT_DIR/${PROBLEM_ID}.resources.txt"
-    export PROBLEM_PATH OUT_FILE META_FILE RESOURCE_FILE TIMEOUT_SECONDS
+    export PROBLEM_PATH OUT_FILE META_FILE TIMEOUT_SECONDS
 
     START_EPOCH_MS=$(date +%s%3N)
+
+    # Run command in background and track peak RSS via ps monitoring loop
+    PEAK_RSS_KB=0
     EXIT_STATUS=0
 
-    if command -v /usr/bin/time >/dev/null 2>&1; then
-      /usr/bin/time -f 'elapsed_seconds=%e\nmax_rss_kb=%M' -o "$RESOURCE_FILE" \
-        timeout --preserve-status "${TIMEOUT_SECONDS}s" bash -lc #{Shell.quote(command)} > "$OUT_FILE" 2>&1 || EXIT_STATUS=$?
-    else
-      timeout --preserve-status "${TIMEOUT_SECONDS}s" bash -lc #{Shell.quote(command)} > "$OUT_FILE" 2>&1 || EXIT_STATUS=$?
-    fi
+    timeout --preserve-status "${TIMEOUT_SECONDS}s" bash -lc #{Shell.quote(command)} > "$OUT_FILE" 2>&1 &
+    CMD_PID=$!
+
+    while kill -0 $CMD_PID 2>/dev/null; do
+      RSS=$(ps -o rss= -p $CMD_PID 2>/dev/null || echo 0)
+      if [ "$RSS" -gt "$PEAK_RSS_KB" ] 2>/dev/null; then
+        PEAK_RSS_KB=$RSS
+      fi
+      sleep 0.1
+    done 2>/dev/null
+
+    wait $CMD_PID
+    EXIT_STATUS=$?
 
     END_EPOCH_MS=$(date +%s%3N)
     WALL_TIME_MS=$((END_EPOCH_MS - START_EPOCH_MS))
-    MEMORY_KB=null
-
-    if [ -f "$RESOURCE_FILE" ]; then
-      PARSED_MEMORY=$(awk -F= '$1 == "max_rss_kb" {print $2; exit}' "$RESOURCE_FILE")
-      if echo "$PARSED_MEMORY" | grep -Eq '^[0-9]+$'; then
-        MEMORY_KB="$PARSED_MEMORY"
-      fi
-    fi
+    MEMORY_KB=$PEAK_RSS_KB
+    [ "$MEMORY_KB" -le 0 ] 2>/dev/null && MEMORY_KB=null
 
     if ! grep -qi "SZS status" "$OUT_FILE"; then
       if [ "$EXIT_STATUS" = "124" ] || [ "$EXIT_STATUS" = "137" ]; then
@@ -135,8 +141,8 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
       fi
     fi
 
-    printf '{"problem_id":"%s","prover":"%s","exit_status":%s,"wall_time_ms":%s,"memory_kb":%s,"output_path":"%s","resource_path":"%s"}\n' \
-      "$PROBLEM_ID" "$PROVER" "$EXIT_STATUS" "$WALL_TIME_MS" "$MEMORY_KB" "$OUT_FILE" "$RESOURCE_FILE" > "$META_FILE"
+    printf '{"problem_id":"%s","prover":"%s","exit_status":%s,"wall_time_ms":%s,"memory_kb":%s,"output_path":"%s"}\n' \
+      "$PROBLEM_ID" "$PROVER" "$EXIT_STATUS" "$WALL_TIME_MS" "$MEMORY_KB" "$OUT_FILE" > "$META_FILE"
 
     exit 0
     """
@@ -149,34 +155,33 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
   """
   @spec single_node_tasks(Run.t(), keyword()) :: binary()
   def single_node_tasks(%Run{} = run, opts \\ []) do
-    run.provers
-    |> Enum.flat_map(fn %Prover{} = prover ->
-      cvc5? = prover.name == :cvc5
-      lash? = prover.name == :lash
+    # Interleave by problem first so all provers get fair parallel starting slots.
+    # Before (grouped): vampire/p1,vampire/p2,...,cvc5/p1,cvc5/p2,... — vampire fills all slots first.
+    # After (interleaved): vampire/p1,cvc5/p1,eprover/p1,...,vampire/p2,cvc5/p2,... — fair across provers.
+    cvc5? = &(&1.name == :cvc5)
+    lash? = &(&1.name == :lash)
 
-      Enum.map(run.problems, fn problem ->
+    run.problems
+    |> Enum.flat_map(fn problem ->
+      Enum.map(run.provers, fn prover ->
         command = runtime_command(prover, run.problem_timeout_seconds, opts)
 
         problem_path =
           cond do
-            cvc5? ->
+            cvc5?.(prover) ->
               raw = problem.path || problem.name
 
               if String.ends_with?(raw, ".p") || String.ends_with?(raw, ".tptp") do
-                # The .smt2 conversion was done locally and synced to the vault
-                # before single_node_tasks is called — no local read needed.
                 String.replace_suffix(raw, ".p", ".smt2")
                 |> String.replace_suffix(".tptp", ".smt2")
               else
                 raw
               end
 
-            lash? ->
+            lash?.(prover) ->
               raw = problem.path || problem.name
 
               if String.ends_with?(raw, ".p") || String.ends_with?(raw, ".tptp") do
-                # The _thf.p conversion was done locally and synced to the vault
-                # before single_node_tasks is called.
                 String.replace_suffix(raw, ".p", "_thf.p")
                 |> String.replace_suffix(".tptp", "_thf.p")
               else
@@ -240,6 +245,7 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     work_dir_line = if work_dir, do: "export HPC_WORK_DIR=#{Shell.quote(work_dir)}", else: ""
     vault_dir_line = if vault_dir, do: "export HPC_VAULT_DIR=#{Shell.quote(vault_dir)}", else: ""
     task_loop = single_node_task_loop(single_node_mode)
+    diag = diagnostic_snippet(opts)
 
     """
     #!/bin/bash -l
@@ -260,19 +266,21 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     unset SLURM_EXPORT_ENV
     set -uo pipefail
 
-    export OMP_NUM_THREADS=1
+    export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
     export OMP_PLACES=cores
     export OMP_PROC_BIND=true
     export SRUN_CPUS_PER_TASK="${SLURM_CPUS_PER_TASK:-1}"
-    export MKL_NUM_THREADS=1
-    export OPENBLAS_NUM_THREADS=1
-    export NUMEXPR_NUM_THREADS=1
-    export LIGHTGBM_NUM_THREADS=1
-    export NTHREAD=1
+    export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+    export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+    export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+    export LIGHTGBM_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+    export NTHREAD="${SLURM_CPUS_PER_TASK:-1}"
     export GOMP_SPINCOUNT=0
     export MKL_CBWR=AUTO
     #{work_dir_line}
     #{vault_dir_line}
+
+    #{diag}
 
     RESULTS_DIR=#{Shell.quote(paths.results_dir)}
     TASKS_FILE=#{Shell.quote(paths.single_node_tasks)}
@@ -288,7 +296,6 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
       local result_dir="$RESULTS_DIR/$prover"
       local out_file="$result_dir/${problem_id}.out"
       local meta_file="$result_dir/${problem_id}.meta.json"
-      local resource_file="$result_dir/${problem_id}.resources.txt"
       local command
 
       mkdir -p "$result_dir"
@@ -298,7 +305,6 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
       export PROBLEM_PATH="$problem_path"
       export OUT_FILE="$out_file"
       export META_FILE="$meta_file"
-      export RESOURCE_FILE="$resource_file"
       export TIMEOUT_SECONDS=#{run.problem_timeout_seconds}
 
       local start_epoch_ms
@@ -306,24 +312,32 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
       local wall_time_ms
       local exit_status=0
       local memory_kb=null
+      local peak_rss_kb=0
+      local cmd_pid
 
       start_epoch_ms=$(date +%s%3N)
 
-      if command -v /usr/bin/time >/dev/null 2>&1; then
-        /usr/bin/time -f 'elapsed_seconds=%e\nmax_rss_kb=%M' -o "$resource_file" \
-          timeout --preserve-status "${TIMEOUT_SECONDS}s" bash -lc "$command" > "$out_file" 2>&1 || exit_status=$?
-      else
-        timeout --preserve-status "${TIMEOUT_SECONDS}s" bash -lc "$command" > "$out_file" 2>&1 || exit_status=$?
-      fi
+      # Run command in background, monitor peak RSS via ps
+      timeout --preserve-status "${TIMEOUT_SECONDS}s" bash -lc "$command" > "$out_file" 2>&1 &
+      cmd_pid=$!
+
+      while kill -0 $cmd_pid 2>/dev/null; do
+        local rss
+        rss=$(ps -o rss= -p $cmd_pid 2>/dev/null || echo 0)
+        if [ "$rss" -gt "$peak_rss_kb" ] 2>/dev/null; then
+          peak_rss_kb=$rss
+        fi
+        sleep 0.1
+      done 2>/dev/null
+
+      wait $cmd_pid
+      exit_status=$?
 
       end_epoch_ms=$(date +%s%3N)
       wall_time_ms=$((end_epoch_ms - start_epoch_ms))
 
-      if [ -f "$resource_file" ]; then
-        parsed_memory=$(awk -F= '$1 == "max_rss_kb" {print $2; exit}' "$resource_file")
-        if echo "$parsed_memory" | grep -Eq '^[0-9]+$'; then
-          memory_kb="$parsed_memory"
-        fi
+      if [ "$peak_rss_kb" -gt 0 ] 2>/dev/null; then
+        memory_kb=$peak_rss_kb
       fi
 
       if ! grep -qi "SZS status" "$out_file"; then
@@ -334,8 +348,8 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
         fi
       fi
 
-      printf '{"problem_id":"%s","prover":"%s","exit_status":%s,"wall_time_ms":%s,"memory_kb":%s,"output_path":"%s","resource_path":"%s"}\n' \
-        "$problem_id" "$prover" "$exit_status" "$wall_time_ms" "$memory_kb" "$out_file" "$resource_file" > "$meta_file"
+      printf '{"problem_id":"%s","prover":"%s","exit_status":%s,"wall_time_ms":%s,"memory_kb":%s,"output_path":"%s"}\n' \
+        "$problem_id" "$prover" "$exit_status" "$wall_time_ms" "$memory_kb" "$out_file" > "$meta_file"
     }
 
     #{task_loop}
@@ -379,12 +393,40 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
       "{result_file}" => "\"$OUT_FILE\"",
       "{timeout_seconds}" => to_string(timeout_seconds),
       "{timeout_ms}" => to_string(timeout_seconds * 1_000),
-      "{sif_path}" => rendered_sif_path
+      "{sif_path}" => rendered_sif_path,
+      "{cores}" => "\"${SLURM_CPUS_PER_TASK:-1}\""
     }
 
     Enum.reduce(replacements, prover.command_template, fn {placeholder, value}, acc ->
       String.replace(acc, placeholder, value)
     end)
+  end
+
+  @doc """
+  Returns a shell snippet that captures node-level diagnostics (CPUs, RAM,
+  SLURM allocation) for debug runs.
+  """
+  @spec diagnostic_snippet(keyword()) :: binary()
+  def diagnostic_snippet(opts \\ []) do
+    if Keyword.get(opts, :debug, false) do
+      """
+      echo "=== ATP_RUNNER_DIAGNOSTIC_START ==="
+      echo "hostname=$(hostname)"
+      echo "nproc=$(nproc --all 2>/dev/null)"
+      echo "free_total_mb=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo unknown)"
+      echo "free_avail_mb=$(awk '/MemAvailable/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo unknown)"
+      echo "slurm_job_id=${SLURM_JOB_ID:-unknown}"
+      echo "slurm_cpus_per_task=${SLURM_CPUS_PER_TASK:-unknown}"
+      echo "slurm_ntasks=${SLURM_NTASKS:-unknown}"
+      echo "slurm_nnodes=${SLURM_NNODES:-unknown}"
+      echo "slurm_nodelist=${SLURM_NODELIST:-unknown}"
+      echo "slurm_cpu_freq=$(lscpu 2>/dev/null | grep 'CPU MHz' | head -1 || echo unknown)"
+      echo "slurm_cpu_model=$(lscpu 2>/dev/null | grep 'Model name' | head -1 || echo unknown)"
+      echo "=== ATP_RUNNER_DIAGNOSTIC_END ==="
+      """
+    else
+      ""
+    end
   end
 
   defp cpus_line(opts) do

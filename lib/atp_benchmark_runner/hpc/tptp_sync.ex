@@ -37,6 +37,9 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
 
   @doc """
   Uploads selected local problem files and returns problems with remote paths.
+
+  Batches the remote existence check into a single `find` command instead of
+  one SSH call per file — avoids rate-limiting the SSH gateway.
   """
   @spec sync_problem_set!(HpcConnect.Session.t(), [Problem.t()], keyword()) :: [Problem.t()]
   def sync_problem_set!(%HpcConnect.Session{} = session, problems, opts \\ [])
@@ -44,7 +47,20 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
     root = remote_root(session, opts)
     RemoteFiles.mkdir_p!(session, root, opts)
 
-    Enum.map(problems, &sync_problem!(session, &1, root, opts))
+    # One SSH call to discover all already-synced remote files
+    existing = existing_remote_paths(session, root)
+
+    Enum.map(problems, &sync_problem!(session, &1, root, existing, opts))
+  end
+
+  defp existing_remote_paths(%HpcConnect.Session{} = session, root) do
+    command =
+      "if [ -d #{Shell.quote(root)} ]; then find #{Shell.quote(root)} -type f -name '*.p' -o -name '*.ax' -o -name '*.smt2' 2>/dev/null; fi"
+
+    session
+    |> HpcConnect.connect!(command)
+    |> String.split("\n", trim: true)
+    |> MapSet.new()
   end
 
   @doc """
@@ -70,23 +86,28 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
     |> Map.put(:remote_tptp_dir, root)
   end
 
-  defp sync_problem!(session, %Problem{} = problem, root, opts) do
+  defp sync_problem!(session, %Problem{} = problem, root, existing, opts) do
     cond do
       local_file?(problem) ->
         remote_path = remote_problem_path(problem, root)
-        RemoteFiles.mkdir_p!(session, posix_dirname(remote_path), opts)
 
-        # Upload the original problem file
-        HpcConnect.SSH.upload!(session, problem.path, remote_path,
-          normalize_line_endings: :lf,
-          normalize_extensions: [".p", ".ax"]
-        )
+        if MapSet.member?(existing, remote_path) do
+          mark_synced(problem, remote_path)
+        else
+          RemoteFiles.mkdir_p!(session, posix_dirname(remote_path), opts)
 
-        # Also upload converted versions needed by specific provers
-        upload_converted!(session, problem.path, remote_path, ".smt2", opts)
-        upload_thf_converted!(session, problem.path, remote_path, opts)
+          # Upload the original problem file
+          HpcConnect.SSH.upload!(session, problem.path, remote_path,
+            normalize_line_endings: :lf,
+            normalize_extensions: [".p", ".ax"]
+          )
 
-        mark_synced(problem, remote_path)
+          # Also upload converted versions needed by specific provers
+          upload_converted!(session, problem.path, remote_path, ".smt2", opts)
+          upload_thf_converted!(session, problem.path, remote_path, opts)
+
+          mark_synced(problem, remote_path)
+        end
 
       already_remote?(problem) ->
         problem

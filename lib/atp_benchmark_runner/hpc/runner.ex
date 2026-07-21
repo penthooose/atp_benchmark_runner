@@ -18,6 +18,7 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
     JobScript,
     RemoteFiles,
     Results,
+    Shell,
     Submitter,
     TPTPSync
   }
@@ -132,20 +133,40 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
         constraint: hpc.constraint,
         mem: hpc.mem,
         exclusive: hpc.exclusive,
-        prepare_images: hpc.prepare_images
+        prepare_images: hpc.prepare_images,
+        debug: hpc.debug
       )
+
+    job_ids_str =
+      submitted_run.submitted_jobs
+      |> Map.values()
+      |> Enum.map(&(Map.get(&1, :job_id) || Map.get(&1, "job_id")))
+      |> Enum.join(", ")
+
+    IO.puts("[runner] Jobs submitted — IDs: #{job_ids_str}")
 
     wait_for_completion!(session, submitted_run, hpc)
 
     results =
-      Results.collect(session, submitted_run,
-        include_raw_output: hpc.include_raw_output,
-        remote_root: hpc.remote_root
-      )
+      try do
+        Results.collect(session, submitted_run,
+          include_raw_output: hpc.include_raw_output,
+          remote_root: hpc.remote_root
+        )
+      rescue
+        e ->
+          IO.puts("[runner] Results.collect warning: #{Exception.message(e)}")
+          []
+      end
 
     # Auto-kill: explicitly cancel job arrays so SLURM releases resources
     # immediately, even for jobs that already reached a terminal state.
-    Submitter.cancel_run(session, submitted_run)
+    # Wrap in try/rescue — SSH disruption during cleanup should not crash results.
+    try do
+      Submitter.cancel_run(session, submitted_run)
+    rescue
+      e -> IO.puts("[runner] cancel_run warning: #{Exception.message(e)}")
+    end
 
     %{
       results: results,
@@ -160,9 +181,11 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
 
     maybe_prepare_images!(session, run, hpc)
 
-    RemoteFiles.mkdir_p!(session, paths.run_dir)
-    RemoteFiles.mkdir_p!(session, paths.logs_dir)
-    RemoteFiles.mkdir_p!(session, paths.results_dir)
+    mkdir_cmd =
+      "mkdir -p " <>
+        Enum.map_join([paths.run_dir, paths.logs_dir, paths.results_dir], " ", &Shell.quote/1)
+
+    HpcConnect.connect!(session, mkdir_cmd)
 
     RemoteFiles.write_text!(session, paths.problem_list, JobScript.problem_list(run), mode: "644")
 
@@ -193,9 +216,12 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
           timeout_seconds: run.problem_timeout_seconds,
           single_node_mode: hpc.single_node_mode,
           max_parallel: hpc.max_parallel_jobs,
-          log_dir: paths.logs_dir
+          log_dir: paths.logs_dir,
+          debug: hpc.debug
         ]
       )
+
+    IO.puts("[runner] Job submitted — ID: #{submitted.job_id}")
 
     submitted_run =
       run
@@ -211,13 +237,23 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
     wait_for_completion!(session, submitted_run, hpc)
 
     results =
-      Results.collect(session, submitted_run,
-        include_raw_output: hpc.include_raw_output,
-        remote_root: hpc.remote_root
-      )
+      try do
+        Results.collect(session, submitted_run,
+          include_raw_output: hpc.include_raw_output,
+          remote_root: hpc.remote_root
+        )
+      rescue
+        e ->
+          IO.puts("[runner] Results.collect warning: #{Exception.message(e)}")
+          []
+      end
 
     # Auto-kill: explicitly cancel the job so SLURM releases the node.
-    Submitter.cancel_run(session, submitted_run)
+    try do
+      Submitter.cancel_run(session, submitted_run)
+    rescue
+      e -> IO.puts("[runner] cancel_run warning: #{Exception.message(e)}")
+    end
 
     %{
       results: results,
@@ -249,9 +285,16 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
       if prover.name == :cvc5 do
         Enum.each(run.problems, fn problem ->
           if local_file?(problem) and
-               (String.ends_with?(problem.path, ".p") or
-                  String.ends_with?(problem.path, ".tptp")) do
-            _ = AtpBenchmarkRunner.TPTPToSMT.convert_file!(problem.path)
+               (String.ends_with?(problem.path, ".p") and
+                  not String.ends_with?(problem.path, "_thf.p")) do
+            smt_content = AtpBenchmarkRunner.TPTPToSMT.convert_file!(problem.path)
+
+            smt_path =
+              problem.path
+              |> String.replace_suffix(".p", ".smt2")
+              |> String.replace_suffix(".tptp", ".smt2")
+
+            File.write!(smt_path, smt_content)
           end
         end)
       end
@@ -259,8 +302,8 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
       if prover.name == :lash do
         Enum.each(run.problems, fn problem ->
           if local_file?(problem) and
-               (String.ends_with?(problem.path, ".p") or
-                  String.ends_with?(problem.path, ".tptp")) do
+               (String.ends_with?(problem.path, ".p") and
+                  not String.ends_with?(problem.path, "_thf.p")) do
             _ =
               AtpBenchmarkRunner.TPTP.ToTHF.ensure_thf(problem.path, :lash,
                 output_dir: Path.dirname(problem.path)
@@ -293,20 +336,38 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
     end
   end
 
-  defp do_wait_for_completion(session, run, hpc, deadline) do
+  defp do_wait_for_completion(session, run, hpc, deadline, failed_count \\ 0, poll_count \\ 0) do
     job_ids =
       run.submitted_jobs
       |> Map.values()
       |> Enum.map(&(Map.get(&1, :job_id) || Map.get(&1, "job_id")))
       |> Enum.reject(&is_nil/1)
 
-    states = Map.new(job_ids, &{&1, job_state(session, &1)})
+    states = batch_job_states(session, job_ids)
 
     cond do
       states == %{} ->
+        IO.puts("[runner] No active jobs found — assuming completed")
         :ok
 
+      states == :error ->
+        backoff_ms = min((1000 * :math.pow(2, failed_count)) |> round(), 60_000)
+
+        IO.puts(
+          "[runner] SSH query failed, retrying in #{backoff_ms}ms (attempt ##{failed_count + 1})"
+        )
+
+        Process.sleep(backoff_ms)
+
+        if System.monotonic_time(:millisecond) >= deadline do
+          raise RuntimeError,
+                "Timed out waiting for HPC benchmark jobs (SSH repeatedly failed)"
+        end
+
+        do_wait_for_completion(session, run, hpc, deadline, failed_count + 1, poll_count)
+
       Enum.all?(states, fn {_job_id, state} -> Config.terminal_state?(state) end) ->
+        IO.puts("[runner] All jobs completed — states: #{inspect(states)}")
         :ok
 
       System.monotonic_time(:millisecond) >= deadline ->
@@ -314,20 +375,49 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
               "Timed out waiting for HPC benchmark jobs: #{inspect(states)}"
 
       true ->
+        # Print progress every 5th poll
+        if rem(poll_count, 5) == 0 do
+          IO.puts(
+            "[runner] Waiting for completion (poll ##{poll_count + 1}) — states: #{inspect(states)}"
+          )
+        end
+
         Process.sleep(hpc.poll_interval_ms)
-        do_wait_for_completion(session, run, hpc, deadline)
+        do_wait_for_completion(session, run, hpc, deadline, 0, poll_count + 1)
     end
   end
 
-  defp job_state(%HpcConnect.Session{} = session, job_id) do
-    command =
-      "state=$(sacct -j #{job_id} --noheader --format=State --parsable2 2>/dev/null | " <>
-        "sed 's/\\x1b\\[[0-9;]*m//g' | grep -v '^$' | grep -v 'WARNING' | grep -v 'Path' | grep -v '!!!' | head -1 || true); " <>
-        "if [ -n \"$state\" ]; then printf '%s' \"$state\"; else squeue -j #{job_id} -h -o '%T' 2>/dev/null | head -1 || true; fi"
+  # Batch all job state queries into one SSH command instead of one per job.
+  defp batch_job_states(_session, job_ids) when job_ids == [], do: %{}
 
-    session
-    |> HpcConnect.connect!(command)
-    |> String.trim()
+  defp batch_job_states(session, job_ids) do
+    ids = Enum.join(job_ids, ",")
+
+    command =
+      "sacct -j #{ids} --noheader --format=JobID,State --parsable2 2>/dev/null | " <>
+        "sed 's/\\x1b\\[[0-9;]*m//g' | grep -v '^$' | grep -v 'WARNING' | grep -v 'Path' | grep -v '!!!' | " <>
+        "awk -F'|' '$1 ~ /^[0-9]+$/ {print $1, $2}'"
+
+    output =
+      session
+      |> HpcConnect.connect!(command)
+      |> String.trim()
+
+    if output == "" or output =~ ~r/connection refused/i or output =~ ~r/Connection closed/i or
+         output =~ ~r/timed out/i do
+      :error
+    else
+      output
+      |> String.split("\n", trim: true)
+      |> Enum.reduce(%{}, fn line, acc ->
+        case String.split(line, ~r{\s+}, parts: 2) do
+          [job_id, state] -> Map.put(acc, String.trim(job_id), String.trim(state))
+          _ -> acc
+        end
+      end)
+    end
+  rescue
+    _ -> :error
   end
 
   defp with_default_sif_paths(%Run{} = run, %HpcConnect.Session{} = session) do

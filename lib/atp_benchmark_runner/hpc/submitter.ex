@@ -43,6 +43,8 @@ defmodule AtpBenchmarkRunner.HPC.Submitter do
   """
   @spec submit_run(HpcConnect.Session.t(), Run.t(), keyword()) :: Run.t() | map()
   def submit_run(%HpcConnect.Session{} = session, %Run{} = run, opts \\ []) do
+    # Propagate debug flag for job script diagnostic injection
+    opts = if Keyword.get(opts, :debug, false), do: Keyword.put(opts, :debug, true), else: opts
     plan = plan(run, session, opts)
 
     if Keyword.get(opts, :dry_run, false) do

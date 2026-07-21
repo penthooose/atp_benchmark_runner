@@ -158,11 +158,15 @@ defmodule AtpBenchmarkRunner.HPC.Images do
   @spec existing_sif_names(HpcConnect.Session.t()) :: MapSet.t()
   def existing_sif_names(%HpcConnect.Session{} = session) do
     images_dir = Path.join(session.work_dir, "singularity_images")
-    glob = Path.join(images_dir, "*.sif")
 
-    session
-    |> HpcConnect.list_remote_files(glob)
-    |> Enum.map(fn name -> String.replace_suffix(name, ".sif", "") end)
+    # Use raw ls path without shell-quoting to allow glob expansion.
+    # HpcConnect.Shell.escape wraps in '', which kills shell globbing.
+    output =
+      HpcConnect.connect!(session, "ls -1 #{images_dir}/*.sif 2>/dev/null || true")
+
+    output
+    |> String.split("\n", trim: true)
+    |> Enum.map(fn name -> name |> Path.basename() |> String.replace_suffix(".sif", "") end)
     |> MapSet.new()
   end
 

@@ -223,7 +223,7 @@ defmodule AtpBenchmarkRunnerTest do
     assert script =~ "#SBATCH --job-name=atp_run_single_single"
     assert script =~ "#SBATCH --partition=cpu"
     assert script =~ "#SBATCH --cpus-per-task=3"
-    assert script =~ "export OMP_NUM_THREADS=1"
+      assert script =~ ~r/export OMP_NUM_THREADS="\$\{SLURM_CPUS_PER_TASK:-1\}"/
     assert script =~ "export MKL_CBWR=AUTO"
     assert script =~ "TASKS_FILE='/work/atp/run_results/run_single/single_node_tasks.tsv'"
     assert script =~ "run_task \"$prover\" \"$problem_path\" \"$problem_id\" \"$command_b64\" &"

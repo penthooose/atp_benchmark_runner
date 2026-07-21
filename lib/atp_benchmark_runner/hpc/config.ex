@@ -122,6 +122,7 @@ defmodule AtpBenchmarkRunner.HPC.Config do
         ),
       prepare_images: bool_value(opts, :prepare_images, "PREPARE_IMAGES", false),
       wait_for_completion: bool_value(opts, :wait_for_completion, "WAIT_FOR_COMPLETION", true),
+      debug: bool_value(opts, :debug, "DEBUG", false),
       poll_interval_ms: int_value(opts, :poll_interval_ms, "POLL_INTERVAL_MS", 10_000),
       max_wait_ms: int_value(opts, :max_wait_ms, "MAX_WAIT_MS", 12 * 60 * 60 * 1_000),
       include_raw_output: bool_value(opts, :include_raw_output, "INCLUDE_RAW_OUTPUT", false),
@@ -137,7 +138,10 @@ defmodule AtpBenchmarkRunner.HPC.Config do
           opts,
           :remote_tptp_dir,
           "REMOTE_TPTP_DIR",
-          posix_join(session.vault_dir || session.work_dir, "tptp")
+          posix_join(
+            posix_join(session.vault_dir || session.work_dir, "atp_benchmark_runner"),
+            "tptp"
+          )
         )
     }
   end
@@ -151,12 +155,18 @@ defmodule AtpBenchmarkRunner.HPC.Config do
   def terminal_state?(_), do: false
 
   # ── default_cpus ──────────────────────────────────────────────────────────
-  # Full node, sequential: --exclusive gives all CPUs, no explicit limit needed.
-  defp default_cpus(:single_node, :sequential, _max_parallel, _prover_count, :full, _total),
-    do: nil
+  # Full node, sequential: all node CPUs. --exclusive + --cpus-per-task=total
+  # is needed because hpc_connect's normalize_apptainer_cpu_shape uses the
+  # cpus-per-task value to round up to full nodes (Helma: rounds up to 48-core
+  # chunks; nil → 1 → 48 instead of 384).
+  defp default_cpus(:single_node, :sequential, _max_parallel, _prover_count, :full, total),
+    do: total
 
-  # Full node, parallel: 1 CPU per task (OMP_NUM_THREADS=1), --exclusive gives the node.
-  defp default_cpus(:single_node, :parallel, _max_parallel, _prover_count, :full, _total), do: 1
+  # Full node, parallel: spread CPUs across concurrent tasks so each one
+  # gets enough cores for multi-threaded provers (Leo-III --cores, E auto-schedule).
+  # --exclusive ensures the whole node is allocated regardless.
+  defp default_cpus(:single_node, :parallel, max_parallel, _prover_count, :full, total),
+    do: max(div(total, max(max_parallel, 1)), 1)
 
   # Half node, sequential: one task uses half the node's CPUs.
   defp default_cpus(:single_node, :sequential, _max_parallel, _prover_count, :half, total),
@@ -168,7 +178,8 @@ defmodule AtpBenchmarkRunner.HPC.Config do
   end
 
   # Multi-node, full: prover gets its own exclusive node.
-  defp default_cpus(:multi_node, _mode, _max_parallel, _prover_count, :full, _total), do: nil
+  defp default_cpus(:multi_node, _mode, _max_parallel, _prover_count, :full, total),
+    do: total
 
   # Multi-node, half: each prover uses half a node's CPUs.
   defp default_cpus(:multi_node, _mode, _max_parallel, _prover_count, :half, total),

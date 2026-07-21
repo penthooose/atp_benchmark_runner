@@ -17,7 +17,7 @@ defmodule AtpBenchmarkRunner.Provers.Vampire do
       sif_name: "vampire",
       executable: "vampire",
       command_template:
-        "apptainer exec {sif_path} vampire --mode casc --time_limit {timeout_seconds} {problem}",
+        "apptainer exec {sif_path} vampire --mode casc --cores {cores} --time_limit {timeout_seconds} {problem}",
       metadata: %{
         logics: ["FOF", "TFF", "THF", "SMT-LIB"],
         integration: :cli,

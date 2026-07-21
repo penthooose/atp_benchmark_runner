@@ -1,0 +1,221 @@
+# HPC Benchmark
+
+```elixir
+Mix.install([
+  {:atp_benchmark_runner, path: "item_14_ATP_Benchmark_Runner/atp_benchmark_runner", force: true}
+])
+```
+
+## 1. Configure paths from `.env`
+
+```elixir
+project_root = Path.expand("..", __DIR__)
+env_file = Path.join(project_root, ".env")
+
+# Load .env values into System.put_env so Config.get() picks them up
+env_map = HpcConnect.load_env_file(env_file)
+Enum.each(env_map, fn {k, v} -> System.put_env(k, v) end)
+
+IO.puts("Configured paths:")
+IO.puts("  TPTP_ROOT:      #{AtpBenchmarkRunner.tptp_dir()}")
+IO.puts("  Store dir:      #{AtpBenchmarkRunner.store_dir()}")
+IO.puts("  SMT temp dir:   #{AtpBenchmarkRunner.Config.smt_tmp_dir()}")
+IO.puts("  .env file:      #{env_file}")
+```
+
+## 2. Bootstrap the HPC session
+
+```elixir
+boot =
+	HpcConnect.bootstrap(
+		mode: :local,
+		env_file: env_file
+	)
+
+session = boot.session
+
+IO.inspect(
+	%{
+		cluster: session.cluster.name,
+		ssh_alias: session.ssh_alias,
+		username: session.username,
+		work_dir: session.work_dir,
+		vault_dir: session.vault_dir
+	},
+	label: "Resolved HPC session"
+)
+```
+
+## 3. Pick provers and select problems from TPTP_ROOT
+
+```elixir
+selected_provers = [:vampire, :leo3]
+
+# Use the configured TPTP_ROOT (C:\tmp\tptp from .env).
+# Problems can be selected by name — they resolve from the TPTP archive,
+# bundled examples, or a livebook cache automatically.
+problems =
+	AtpBenchmarkRunner.select_problems(
+		names: ["GRP001-0.p", "GRP002+0.p", "LAT001+0.p"],
+		limit: 2
+	)
+
+IO.inspect(Enum.map(problems, &%{name: &1.name, path: &1.path}), label: "Problems")
+```
+
+---
+
+## 4. Inspect the remote image prep plan
+
+```elixir
+prover_structs = Enum.map(selected_provers, &AtpBenchmarkRunner.Prover.builtin!/1)
+
+image_plan =
+	AtpBenchmarkRunner.image_build_plan(
+		session,
+		prover_structs
+	)
+
+IO.inspect(image_plan, label: "Remote image build plan", limit: :infinity)
+```
+
+---
+
+## 5. Optionally prepare ATP prover images now
+
+```elixir
+prepare_images_now? = false
+
+if prepare_images_now? do
+	uploaded_defs =
+		AtpBenchmarkRunner.upload_prover_definitions!(
+			session,
+			prover_structs,
+			install_scripts: false
+		)
+
+	IO.inspect(uploaded_defs, label: "Uploaded ATP prover defs")
+
+	built_images =
+		AtpBenchmarkRunner.build_prover_images!(
+			session,
+			prover_structs,
+			install_scripts: false
+		)
+
+	IO.inspect(built_images, label: "Built ATP prover images")
+else
+	:ok
+end
+```
+
+---
+
+## 6. Bootstrap the benchmark plan
+
+This bootstraps a single-node sequential plan with `prepare_images: true`
+(auto-builds missing `.sif` images on the cluster) and `wait_for_completion: true`
+(submits and waits for all results before returning).
+
+```elixir
+# ── Single-node sequential, full node ─────────────────────────
+plan =
+	AtpBenchmarkRunner.bootstrap(
+		session,
+		selected_provers,
+		problems,
+		mode: :hpc,
+		hpc_mode: :single_node,
+		single_node_mode: :sequential,
+		timeout_seconds: 30,
+		wait_for_completion: true,
+		prepare_images: true
+	)
+
+IO.inspect(plan, label: "Benchmark plan", limit: :infinity)
+```
+
+---
+
+## 7. Submit the run and collect results
+
+```elixir
+IO.puts("Starting HPC benchmark run...")
+IO.puts("  Provers: #{inspect(Enum.map(selected_provers, & &1))}")
+IO.puts("  Problems: #{length(problems)}")
+IO.puts("  Plan mode: #{plan.metadata[:hpc][:hpc_mode]}/#{plan.metadata[:hpc][:single_node_mode]}")
+IO.puts("  Partition: #{plan.metadata[:hpc][:partition]}")
+IO.puts("")
+
+{t_ms, results} =
+	:timer.tc(fn ->
+		AtpBenchmarkRunner.run_benchmark(plan)
+	end)
+
+elapsed_s = t_ms / 1_000_000
+IO.puts("Benchmark completed in #{Float.round(elapsed_s, 2)}s")
+IO.puts("Total results: #{length(results)}")
+```
+
+---
+
+## 8. Results table
+
+```elixir
+IO.puts("| # | Problem | Prover | SZS Status | Wall (ms) | Memory (KB) | Solved? |")
+IO.puts("|---|---------|--------|------------|-----------|-------------|---------|")
+
+results
+|> Enum.with_index(1)
+|> Enum.each(fn {r, i} ->
+	solved = if AtpBenchmarkRunner.Result.solved?(r), do: "✅", else: "❌"
+	IO.puts("| #{i} | #{r.problem_id} | #{r.prover} | #{r.szs_status || "?"} | #{r.wall_time_ms || "?"} | #{r.memory_kb || "?"} | #{solved} |")
+end)
+```
+
+---
+
+## 9. Aggregated report
+
+```elixir
+report = AtpBenchmarkRunner.report(results, plan)
+
+IO.puts("Run ID: #{report.run_id}")
+IO.puts("Generated: #{report.generated_at}")
+IO.puts("")
+IO.puts(report.markdown)
+```
+
+### Per-prover breakdown
+
+```elixir
+IO.puts("| Prover | Total | Solved | Failed | Solve Rate |")
+IO.puts("|--------|------:|-------:|-------:|-----------:|")
+
+Enum.each(report.by_prover, fn p ->
+	IO.puts("| #{p.prover} | #{p.total} | #{p.solved} | #{p.failed} | #{Float.round(p.solve_rate * 100, 1)}% |")
+end)
+```
+
+---
+
+## 10. Persist results to local store
+
+```elixir
+run = AtpBenchmarkRunner.new_run(
+	title: "HPC smoke test",
+	problems: problems,
+	provers: Enum.map(selected_provers, & &1),
+	walltime: "00:30:00",
+	problem_timeout_seconds: 30
+)
+
+run_path = AtpBenchmarkRunner.save_run!(run)
+IO.puts("Run saved: #{run_path}")
+
+results_path = AtpBenchmarkRunner.save_results!(run, results)
+IO.puts("Results saved: #{results_path}")
+
+report_path = AtpBenchmarkRunner.save_report!(run, report)
+IO.puts("Report saved: #{report_path}")
+```

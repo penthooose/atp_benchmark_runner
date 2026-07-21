@@ -1,13 +1,26 @@
 # HPC Benchmark
 
 ```elixir
-project_root = Path.expand("..", __DIR__)
-
 Mix.install([
-	{:atp_benchmark_runner, path: project_root, force: true}
+  {:atp_benchmark_runner, path: "item_14_ATP_Benchmark_Runner/atp_benchmark_runner", force: true}
 ])
+```
 
-AtpBenchmarkRunner.setup_local(tmp_root: Path.join(project_root, "tmp"))
+## 1. Configure paths from `.env`
+
+```elixir
+project_root = Path.expand("..", __DIR__)
+env_file = Path.join(project_root, ".env")
+
+# Load .env values into System.put_env so Config.get() picks them up
+env_map = HpcConnect.load_env_file(env_file)
+Enum.each(env_map, fn {k, v} -> System.put_env(k, v) end)
+
+IO.puts("Configured paths:")
+IO.puts("  TPTP_ROOT:      #{AtpBenchmarkRunner.tptp_dir()}")
+IO.puts("  Store dir:      #{AtpBenchmarkRunner.store_dir()}")
+IO.puts("  SMT temp dir:   #{AtpBenchmarkRunner.Config.smt_tmp_dir()}")
+IO.puts("  .env file:      #{env_file}")
 ```
 
 This notebook is the HPC counterpart to the local example. It uses the local
@@ -16,11 +29,9 @@ the sibling `hpc_connect` path from its `mix.exs`.
 
 ---
 
-## 1. Bootstrap the HPC session
+## 2. Bootstrap the HPC session
 
 ```elixir
-env_file = Path.join(project_root, ".env")
-
 boot =
 	HpcConnect.bootstrap(
 		mode: :local,
@@ -48,21 +59,17 @@ through the benchmark-runner helpers below.
 
 ---
 
-## 2. Pick provers and a tiny TPTP smoke set
+## 3. Pick provers and select problems from TPTP_ROOT
 
 ```elixir
 selected_provers = [:vampire, :cvc5]
 
-tptp_root = Path.join(project_root, "tmp/benchmark_hpc_tptp")
-
-AtpBenchmarkRunner.install_tptp_examples!(
-	root_dir: tptp_root,
-	force: true
-)
-
+# Use the configured TPTP_ROOT (C:\tmp\tptp from .env).
+# Problems can be selected by name — they resolve from the TPTP archive,
+# bundled examples, or a livebook cache automatically.
 problems =
-	AtpBenchmarkRunner.load_tptp_problems(
-		root_dir: tptp_root,
+	AtpBenchmarkRunner.select_problems(
+		names: ["GRP001-0.p", "GRP002+0.p", "LAT001+0.p"],
 		limit: 2
 	)
 
@@ -71,7 +78,7 @@ IO.inspect(Enum.map(problems, &%{name: &1.name, path: &1.path}), label: "Problem
 
 ---
 
-## 3. Inspect the remote image prep plan
+## 4. Inspect the remote image prep plan
 
 ```elixir
 prover_structs = Enum.map(selected_provers, &AtpBenchmarkRunner.Prover.builtin!/1)
@@ -87,7 +94,7 @@ IO.inspect(image_plan, label: "Remote image build plan", limit: :infinity)
 
 ---
 
-## 4. Optionally prepare ATP prover images now
+## 5. Optionally prepare ATP prover images now
 
 ```elixir
 prepare_images_now? = false
@@ -117,7 +124,7 @@ end
 
 ---
 
-## 5. Bootstrap an HPC benchmark plan
+## 6. Bootstrap an HPC benchmark plan
 
 Select the execution mode and resource strategy:
 
@@ -129,11 +136,11 @@ Auto-detected per cluster (Helma CPU: 384/192, Fritz: 72/36, spr\*: 104/52).
 | `:full`     | Yes           | Maximise per-prover throughput        |
 | `:half`     | No            | Share node with other jobs; efficient |
 
-| Mode                             | `hpc_mode`     | `single_node_mode` | Resource allocation                                                  |
-| -------------------------------- | -------------- | ------------------ | -------------------------------------------------------------------- |
-| Single-node sequential (default) | `:single_node` | `:sequential`      | All provers share 1 node. Tasks one at a time; each gets node CPUs.  |
+| Mode                             | `hpc_mode`     | `single_node_mode` | Resource allocation                                                    |
+| -------------------------------- | -------------- | ------------------ | ---------------------------------------------------------------------- |
+| Single-node sequential (default) | `:single_node` | `:sequential`      | All provers share 1 node. Tasks one at a time; each gets node CPUs.    |
 | Single-node parallel             | `:single_node` | `:parallel`        | All provers share 1 node. Tasks run concurrently (≤ `max_parallel`). |
-| Multi-node (prover per node)     | `:multi_node`  | —                  | Each prover gets its own node.                                       |
+| Multi-node (prover per node)     | `:multi_node`  | —                | Each prover gets its own node.                                         |
 
 ```elixir
 # ── Single-node sequential, full node (default) ───────────────
@@ -214,7 +221,9 @@ before launch, set `prepare_images: true` in the benchmark plan above.
 
 ---
 
-## 6. Optionally submit the run
+<!-- livebook:{"branch_parent_index":5} -->
+
+## 7. Optionally submit the run
 
 ```elixir
 submit_run? = false
