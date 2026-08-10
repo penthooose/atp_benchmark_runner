@@ -22,7 +22,7 @@ defmodule AtpBenchmarkRunner.Problem do
           id: binary(),
           name: binary(),
           path: binary() | nil,
-          source: :local | :remote | :tptp_name | nil,
+          source: :local | :remote | :tptp_name | :bundled | :downloaded | nil,
           logic: binary() | nil,
           rating: float() | nil,
           expected_status: binary() | nil,

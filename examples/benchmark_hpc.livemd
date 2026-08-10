@@ -42,6 +42,7 @@ session = boot.session
 
 IO.inspect(
 	%{
+
 		cluster: session.cluster.name,
 		ssh_alias: session.ssh_alias,
 		username: session.username,
@@ -52,25 +53,69 @@ IO.inspect(
 )
 ```
 
-`HpcConnect.bootstrap/1` already installs the remote helper scripts and uploads
-the generic bundled `hpc_connect` def-file set. ATP prover definitions stay in
-`atp_benchmark_runner/priv/provers`, so ATP-specific image prep still goes
-through the benchmark-runner helpers below.
+`HpcConnect.bootstrap/1` installs the remote helper scripts and uploads
+the generic bundled `hpc_connect` def-file set.
 
----
+## 2b. Download problems
+
+```elixir
+selected_problems = [
+  "ALG001+0.p",
+  "GRP001-0.p",
+  "GRP002+0.p",
+  "GRP003+0.p",
+  "GRP004+0.p",
+  "GRP720+1.p",
+  "GRP752-1.p",
+  "LAT001+0.p",
+  "PUZ001+0.p",
+  "REL001+0.p",
+  "SET001^0.p",
+  "SMT001+0.p",
+  "SYN000+0.p",
+  "THF001+0.p"
+]
+
+{downloaded, download_warnings} =
+	AtpBenchmarkRunner.download_tptp_problems!(selected_problems, force: false)
+
+IO.puts("Downloaded #{length(downloaded)} problem(s):")
+Enum.each(downloaded, fn problem ->
+	IO.puts("  ✅ #{problem.name}  status=#{problem.expected_status}  rating=#{problem.rating}")
+	IO.puts("     -> #{problem.path}")
+end)
+
+if download_warnings == [] do
+	IO.puts("No warnings.")
+else
+	IO.puts("Warnings (#{length(download_warnings)}):")
+	Enum.each(download_warnings, fn w ->
+		IO.puts("  ⚠️  #{w.name}: #{inspect(w.reason)}")
+	end)
+end
+```
 
 ## 3. Pick provers and select problems from TPTP_ROOT
 
 ```elixir
-selected_provers = [:vampire, :cvc5]
+selected_provers = [
+   :tableaux,
+   :eprover,
+   :vampire,
+   :cvc5,
+   :zipperposition,
+   :leo3,
+   :leo2,
+   :lash
+]
 
 # Use the configured TPTP_ROOT (C:\tmp\tptp from .env).
 # Problems can be selected by name — they resolve from the TPTP archive,
 # bundled examples, or a livebook cache automatically.
 problems =
 	AtpBenchmarkRunner.select_problems(
-		names: ["GRP001-0.p", "GRP002+0.p", "LAT001+0.p"],
-		limit: 2
+		names: selected_problems,
+		limit: 10
 	)
 
 IO.inspect(Enum.map(problems, &%{name: &1.name, path: &1.path}), label: "Problems")
@@ -221,19 +266,139 @@ before launch, set `prepare_images: true` in the benchmark plan above.
 
 ---
 
-<!-- livebook:{"branch_parent_index":5} -->
+<!-- livebook:{"branch_parent_index":6} -->
 
-## 7. Optionally submit the run
+## 7. Submit the run and collect results
 
 ```elixir
-submit_run? = false
+IO.puts("Starting HPC benchmark run...")
+IO.puts("  Provers: #{inspect(Enum.map(selected_provers, & &1))}")
+IO.puts("  Problems: #{length(problems)}")
+IO.puts("  Plan mode: #{plan.metadata[:hpc][:hpc_mode]}/#{plan.metadata[:hpc][:single_node_mode]}")
+IO.puts("  Partition: #{plan.metadata[:hpc][:partition]}")
+IO.puts("")
 
-results =
-	if submit_run? do
+{t_ms, results} =
+	:timer.tc(fn ->
 		AtpBenchmarkRunner.run_benchmark(plan)
-	else
-		[]
-	end
+	end)
 
-IO.inspect(results, label: "Results")
+elapsed_s = t_ms / 1_000_000
+IO.puts("Benchmark completed in #{Float.round(elapsed_s, 2)}s")
+IO.puts("Total results: #{length(results)}")
+```
+
+---
+
+<!-- livebook:{"branch_parent_index":6} -->
+
+## 8. Results table
+
+```elixir
+IO.puts("| # | Problem | Prover | SZS Status | Wall (ms) | Memory (KB) | Solved? |")
+IO.puts("|---|---------|--------|------------|-----------|-------------|---------|")
+
+results
+|> Enum.with_index(1)
+|> Enum.each(fn {r, i} ->
+	solved = if AtpBenchmarkRunner.Result.solved?(r), do: "✅", else: "❌"
+	IO.puts("| #{i} | #{r.problem_id} | #{r.prover} | #{r.szs_status || "?"} | #{r.wall_time_ms || "?"} | #{r.memory_kb || "?"} | #{solved} |")
+end)
+```
+
+---
+
+## 9. Aggregated report
+
+```elixir
+report = AtpBenchmarkRunner.report(results, plan)
+
+IO.puts("Run ID: #{report.run_id}")
+IO.puts("Generated: #{report.generated_at}")
+IO.puts("")
+IO.puts(report.markdown)
+```
+
+### Per-prover breakdown
+
+```elixir
+IO.puts("| Prover | Total | Solved | Failed | Solve Rate |")
+IO.puts("|--------|------:|-------:|-------:|-----------:|")
+
+Enum.each(report.by_prover, fn p ->
+	IO.puts("| #{p.prover} | #{p.total} | #{p.solved} | #{p.failed} | #{Float.round(p.solve_rate * 100, 1)}% |")
+end)
+```
+
+### Per-problem comparison
+
+```elixir
+AtpBenchmarkRunner.print_per_problem(report)
+```
+
+### Full explained results
+
+```elixir
+IO.puts("Full explained results with proofs:\n")
+AtpBenchmarkRunner.explain_full(results) |> IO.puts()
+```
+
+### Filtered results by prover
+
+```elixir
+target_prover = :vampire
+
+IO.puts("Verbose report for prover #{target_prover}:\n")
+AtpBenchmarkRunner.verbose_report(results, prover: target_prover, solved_only: true)
+|> Enum.each(&IO.puts/1)
+```
+
+### View a specific proof
+
+```elixir
+target_prover = :vampire
+target_problem = "GRP001-0"
+
+AtpBenchmarkRunner.show_proof(results, target_prover, target_problem)
+```
+
+### Raw prover debug output
+
+```elixir
+target_prover = :vampire
+target_problem = "GRP001-0"
+
+result = Enum.find(results, fn r ->
+  r.prover == target_prover and r.problem_id == target_problem
+end)
+
+if result && result.raw_output do
+  IO.puts("Raw output for #{result.problem_id} / #{result.prover}:\n")
+  IO.puts(result.raw_output)
+else
+  IO.puts("Result not found or no raw output stored (rerun with include_raw_output: true)")
+end
+```
+
+---
+
+## 10. Persist results to local store
+
+```elixir
+run = AtpBenchmarkRunner.new_run(
+	title: "HPC smoke test",
+	problems: problems,
+	provers: Enum.map(selected_provers, & &1),
+	walltime: "00:30:00",
+	problem_timeout_seconds: 30
+)
+
+run_path = AtpBenchmarkRunner.save_run!(run)
+IO.puts("Run saved: #{run_path}")
+
+results_path = AtpBenchmarkRunner.save_results!(run, results)
+IO.puts("Results saved: #{results_path}")
+
+report_path = AtpBenchmarkRunner.save_report!(run, report)
+IO.puts("Report saved: #{report_path}")
 ```

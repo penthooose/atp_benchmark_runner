@@ -15,6 +15,7 @@ defmodule AtpBenchmarkRunner.Config do
   @thf_tmp_dir_var "ATP_BENCHMARK_RUNNER_THF_TMP_DIR"
   @bundled_examples_dir_var "ATP_BENCHMARK_RUNNER_BUNDLED_EXAMPLES_DIR"
   @user_examples_dir_var "ATP_BENCHMARK_RUNNER_USER_EXAMPLES_DIR"
+  @single_download_dir_var "ATP_BENCHMARK_RUNNER_SINGLE_DOWNLOAD_DIR"
 
   @doc """
   Loads configuration values from the configured `.env` file.
@@ -130,6 +131,32 @@ defmodule AtpBenchmarkRunner.Config do
     |> option_value([:user_examples_dir, :user_dir])
     |> first_present(get(@user_examples_dir_var, opts))
     |> first_present(Path.join(tptp_dir(opts), "user_examples"))
+    |> expand_path()
+  end
+
+  @doc """
+  Returns the base directory under which individually downloaded TPTP problems
+  are stored.
+
+  To make downloaded single problems behave exactly like files from an unpacked
+  official archive, files are written in the archive layout below this base:
+
+    * `<base>/Problems/<DOMAIN>/<NAME>.p` for problems
+    * `<base>/Axioms/<DOMAIN>/<NAME>.ax` for axioms
+
+  Defaults to the TPTP root (`tptp_dir/1`), so downloads land directly at the
+  archive-consistent paths (e.g. `<tptp_root>/Problems/GRP/GRP001-1.p`) and are
+  picked up by the index, name resolution, and HPC sync without any extra steps.
+
+  Configure via `ATP_BENCHMARK_RUNNER_SINGLE_DOWNLOAD_DIR` env var or the
+  `:single_download_dir` option to redirect them elsewhere.
+  """
+  @spec single_download_dir(keyword()) :: binary()
+  def single_download_dir(opts \\ []) do
+    opts
+    |> option_value([:single_download_dir])
+    |> first_present(get(@single_download_dir_var, opts))
+    |> first_present(tptp_dir(opts))
     |> expand_path()
   end
 

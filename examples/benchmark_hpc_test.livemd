@@ -65,6 +65,38 @@ IO.inspect(Enum.map(problems, &%{name: &1.name, path: &1.path}), label: "Problem
 
 ---
 
+## 3b. Download the smoke problems individually (no full archive)
+
+Instead of pulling the whole TPTP `.tgz`, download only the named problems from
+the official SeeTPTP CGI. These three names are bundled smoke examples (not on
+the official server), so the local fallback resolves them from
+`priv/tptp_examples` (usable from the bundled tmp dir, never written into
+`<TPTP_ROOT>/Problems/`).
+
+```elixir
+download_names = ["GRP001-0.p", "GRP002+0.p", "LAT001+0.p"]
+
+{downloaded, download_warnings} =
+	AtpBenchmarkRunner.download_tptp_problems!(download_names, force: false)
+
+IO.puts("Downloaded #{length(downloaded)} problem(s):")
+Enum.each(downloaded, fn problem ->
+	IO.puts("  ✅ #{problem.name}  status=#{problem.expected_status}  rating=#{problem.rating}")
+	IO.puts("     -> #{problem.path}")
+end)
+
+if download_warnings == [] do
+	IO.puts("No warnings.")
+else
+	IO.puts("Warnings (#{length(download_warnings)}):")
+	Enum.each(download_warnings, fn w ->
+		IO.puts("  ⚠️  #{w.name}: #{inspect(w.reason)}")
+	end)
+end
+```
+
+---
+
 ## 4. Inspect the remote image prep plan
 
 ```elixir
@@ -195,6 +227,56 @@ IO.puts("|--------|------:|-------:|-------:|-----------:|")
 Enum.each(report.by_prover, fn p ->
 	IO.puts("| #{p.prover} | #{p.total} | #{p.solved} | #{p.failed} | #{Float.round(p.solve_rate * 100, 1)}% |")
 end)
+```
+
+### Per-problem comparison
+
+```elixir
+AtpBenchmarkRunner.print_per_problem(report)
+```
+
+### Full explained results
+
+```elixir
+IO.puts("Full explained results with proofs:\n")
+AtpBenchmarkRunner.explain_full(results) |> IO.puts()
+```
+
+### Filtered results by prover
+
+```elixir
+target_prover = :vampire
+
+IO.puts("Verbose report for prover #{target_prover}:\n")
+AtpBenchmarkRunner.verbose_report(results, prover: target_prover, solved_only: true)
+|> Enum.each(&IO.puts/1)
+```
+
+### View a specific proof
+
+```elixir
+target_prover = :vampire
+target_problem = "GRP001-0"
+
+AtpBenchmarkRunner.show_proof(results, target_prover, target_problem)
+```
+
+### Raw prover debug output
+
+```elixir
+target_prover = :vampire
+target_problem = "GRP001-0"
+
+result = Enum.find(results, fn r ->
+  r.prover == target_prover and r.problem_id == target_problem
+end)
+
+if result && result.raw_output do
+  IO.puts("Raw output for #{result.problem_id} / #{result.prover}:\n")
+  IO.puts(result.raw_output)
+else
+  IO.puts("Result not found or no raw output stored (rerun with include_raw_output: true)")
+end
 ```
 
 ---

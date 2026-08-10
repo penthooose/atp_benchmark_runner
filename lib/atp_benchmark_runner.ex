@@ -169,6 +169,46 @@ defmodule AtpBenchmarkRunner do
   def ensure_tptp_archive(opts \\ []), do: TPTP.ensure_archive(opts)
 
   @doc """
+  Downloads only the named TPTP problems instead of the full archive.
+
+  Problems that exist in the current official release are fetched from the
+  TPTP SeeTPTP CGI and written to their archive-consistent path
+  `<tptp_root>/Problems/<DOMAIN>/<NAME>.p`. Names the server does not have
+  (e.g. bundled smoke examples that are not real TPTP problems) are looked up in
+  the local sources by default — bundled examples from `priv/tptp_examples` are
+  auto-copied into the bundled tmp dir and returned from there, so they are
+  usable without ever being written into `<tptp_root>/Problems/`.
+
+  Returns `{:ok, problems, warnings}` where `warnings` is a list of
+  `%{name: binary(), reason: term()}` maps (only names found in neither the
+  server nor any local source).
+
+  Options: `:root_dir`, `:force`, `:bundled_fallback` (set `false` for strict
+  server-only; missing names then warn with `{:not_found, name}`).
+
+      {:ok, problems, warnings} =
+        AtpBenchmarkRunner.download_tptp_problems(["GRP001-1.p", "LAT001-1.p"])
+  """
+  @spec download_tptp_problems([binary()], keyword()) ::
+          {:ok, [AtpBenchmarkRunner.Problem.t()], [%{name: binary(), reason: term()}]}
+  def download_tptp_problems(names, opts \\ []), do: TPTP.download_problems(names, opts)
+
+  @doc """
+  Like `download_tptp_problems/2` but returns `{problems, warnings}` directly
+  for Livebook/manual use. Best-effort — missing names become warnings, never an
+  exception.
+
+      {problems, warnings} = AtpBenchmarkRunner.download_tptp_problems!(names)
+  """
+  @spec download_tptp_problems!([binary()], keyword()) ::
+          {[AtpBenchmarkRunner.Problem.t()], [%{name: binary(), reason: term()}]}
+  def download_tptp_problems!(names, opts \\ []) do
+    case TPTP.download_problems(names, opts) do
+      {:ok, problems, warnings} -> {problems, warnings}
+    end
+  end
+
+  @doc """
   Loads local TPTP files into benchmark problem structs.
   """
   @spec load_tptp_problems(keyword()) :: [AtpBenchmarkRunner.Problem.t()]

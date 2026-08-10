@@ -2,11 +2,13 @@ defmodule AtpBenchmarkRunner.TPTP do
   @moduledoc """
   TPTP problem library management.
 
-  Supports four practical workflows:
+  Supports five practical workflows:
 
   - drop user-supplied TPTP files into `./tmp/tptp_user_examples/` (highest priority)
   - use already copied local TPTP files, such as `tmp/tptp_problems`
   - install bundled tiny smoke examples from `priv/tptp_examples`
+  - download only specific named problems from the official TPTP web service
+    (see `download_problems/2`)
   - explicitly download and extract the official full TPTP archive
   """
 
@@ -70,6 +72,125 @@ defmodule AtpBenchmarkRunner.TPTP do
   end
 
   @doc """
+  Downloads only the named TPTP problems instead of the full archive.
+
+  Each name is resolved in two steps:
+
+  1. **Official server** — fetched individually from the TPTP SeeTPTP CGI
+     (`https://tptp.org/cgi-bin/SeeTPTP?Category=Problems&File=...`) and written
+     to its archive-consistent path `<tptp_root>/Problems/<DOMAIN>/<NAME>.p`
+     (axioms to `<tptp_root>/Axioms/<DOMAIN>/<NAME>.ax`), the same layout as an
+     unpacked archive.
+  2. **Local fallback (default on)** — a name the server does not have (e.g. a
+     bundled smoke example that is not a real TPTP problem, or a renumbered
+     name) is looked up in local sources instead of being declared unavailable:
+     user examples dir → individually-downloaded dir → bundled examples
+     (`priv/tptp_examples`, auto-copied into the bundled tmp dir on first use)
+     → installed TPTP root. If found, it is returned from its existing path —
+     bundled smoke examples become usable from the bundled tmp dir **without
+     being copied into `<tptp_root>/Problems/`**, so the real library is never
+     polluted with stub files.
+
+  Only names found in *neither* the server nor any local source become
+  `%{name: ..., reason: {:not_found_anywhere, name}}` warnings. Set
+  `bundled_fallback: false` for strict server-only behavior (a missing name then
+  becomes a `{:not_found, name}` warning with no local lookup).
+
+  Returns `{:ok, problems, warnings}` where `problems` is `[Problem.t()]` and
+  `warnings` is a list of `%{name: binary(), reason: term()}` maps.
+
+      {:ok, problems, warnings} =
+        AtpBenchmarkRunner.TPTP.download_problems(["GRP001-1.p", "UNKNOWN-9.p"])
+
+  Options: `:root_dir`, `:force`, `:bundled_fallback`, `:fetch_fun`
+  (injectable for offline tests).
+  """
+  @spec download_problems([binary()], keyword()) ::
+          {:ok, [Problem.t()], [%{name: binary(), reason: term()}]}
+  def download_problems(names, opts \\ []) when is_list(names) and names != [] do
+    bundled_fallback? = Keyword.get(opts, :bundled_fallback, true)
+
+    {pairs, warnings} =
+      Enum.reduce(names, {[], []}, fn name, {ok_acc, warn_acc} ->
+        case download_one(name, bundled_fallback?, opts) do
+          {:ok, path} ->
+            {[{name, path} | ok_acc], warn_acc}
+
+          {:warning, reason} ->
+            {ok_acc, [%{name: Path.basename(name), reason: reason} | warn_acc]}
+        end
+      end)
+
+    warn_download_failures(warnings)
+
+    problems =
+      pairs
+      |> Enum.reverse()
+      |> Enum.map(fn {_name, path} -> Problem.from_tptp_file(path, source: :downloaded) end)
+
+    {:ok, problems, Enum.reverse(warnings)}
+  end
+
+  @doc """
+  Like `download_problems/2` but returns `{problems, warnings}` directly for
+  Livebook/manual use. Best-effort: names that cannot be obtained become
+  warnings, never an exception.
+
+      {problems, warnings} = AtpBenchmarkRunner.TPTP.download_problems!(names)
+  """
+  @spec download_problems!([binary()], keyword()) ::
+          {[Problem.t()], [%{name: binary(), reason: term()}]}
+  def download_problems!(names, opts \\ []) do
+    case download_problems(names, opts) do
+      {:ok, problems, warnings} -> {problems, warnings}
+    end
+  end
+
+  defp download_one(name, bundled_fallback?, opts) do
+    case Downloader.download_problem(name, opts) do
+      {:ok, path} ->
+        {:ok, path}
+
+      {:error, {:not_found, _} = reason} ->
+        if bundled_fallback? do
+          case fallback_download(name, opts) do
+            {:ok, path} -> {:ok, path}
+            {:error, reason} -> {:warning, reason}
+          end
+        else
+          {:warning, reason}
+        end
+
+      {:error, reason} ->
+        {:warning, reason}
+    end
+  end
+
+  defp fallback_download(name, opts) do
+    case resolve_problem_name(name, opts) do
+      nil ->
+        {:error, {:not_found_anywhere, Path.basename(name)}}
+
+      path ->
+        # Return the resolved local path as-is (e.g. the bundled examples tmp
+        # dir, a user-dropped file, or an installed TPTP root). Deliberately no
+        # copy into <tptp_root>/Problems/ so bundled smoke stubs never pollute
+        # the real library.
+        {:ok, path}
+    end
+  end
+
+  defp warn_download_failures([]), do: :ok
+
+  defp warn_download_failures(warnings) do
+    IO.warn(
+      "TPTP single download: #{length(warnings)} problem(s) could not be downloaded:\n" <>
+        Enum.map_join(warnings, "\n", fn w -> "  #{w.name}: #{inspect(w.reason)}" end),
+      label: "AtpBenchmarkRunner.TPTP"
+    )
+  end
+
+  @doc """
   Installs bundled tiny TPTP-style examples into the configured root.
 
   Default destination resolves as follows:
@@ -124,10 +245,12 @@ defmodule AtpBenchmarkRunner.TPTP do
 
   Searches in order:
     1. The user examples tmp dir (`./tmp/tptp_user_examples/`) — highest priority
-    2. The bundled examples tmp dir (`./tmp/tptp_examples/`) — fast, no index needed
-    3. The configured TPTP library root (`Problems/<domain>/<name>`, `Axioms/<domain>/<name>`)
-    4. The legacy bundled `priv/tptp_examples/` directory
-    5. As a direct file path
+    2. Individually downloaded problems (`<tptp_root>/Problems/<DOMAIN>/<name>`,
+       `<tptp_root>/Axioms/<DOMAIN>/<name>` — see `download_problems/2`)
+    3. The bundled examples tmp dir (`./tmp/tptp_examples/`) — fast, no index needed
+    4. The configured TPTP library root (`Problems/<domain>/<name>`, `Axioms/<domain>/<name>`)
+    5. The legacy bundled `priv/tptp_examples/` directory
+    6. As a direct file path
 
   Accepts names like `"GRP001-0.p"`, `"problems/ana/ANA002-4.p"`,
   `"axioms/AGT001+2.ax"`, or a full/relative path.
@@ -140,6 +263,8 @@ defmodule AtpBenchmarkRunner.TPTP do
     candidates = [
       # User examples tmp dir (fast File.exists?, highest priority)
       fn -> resolve_in_user_dir(basename) end,
+      # Individually downloaded problems dir (see download_problems/2)
+      fn -> resolve_in_single_download_dir(basename, opts) end,
       # Bundled examples tmp dir (fast File.exists?, no index needed)
       fn -> resolve_in_bundled_dir(basename) end,
       # Explicit path with Problems/ or Axioms/ prefix
@@ -424,6 +549,11 @@ defmodule AtpBenchmarkRunner.TPTP do
 
   defp resolve_in_user_dir(basename) do
     candidate = Path.join(user_dir(), basename)
+    if File.exists?(candidate), do: candidate
+  end
+
+  defp resolve_in_single_download_dir(basename, opts) do
+    candidate = Downloader.problem_target(basename, opts)
     if File.exists?(candidate), do: candidate
   end
 
