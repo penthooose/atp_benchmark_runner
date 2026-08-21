@@ -16,14 +16,18 @@ defmodule AtpBenchmarkRunner.Provers.Tableaux do
       kind: :apptainer,
       sif_name: "simple_tableaux_solver",
       executable: "simple_tableaux_solver",
-      command_template:
-        "apptainer exec {sif_path} simple_tableaux_solver solve {problem} --timeout {timeout_seconds}",
+      # The solver's escript CLI (item #12, STS.HybridTableauxSolverMain) takes
+      # `--tptp-file <path>` — there is no `solve` subcommand nor `--timeout`
+      # flag. The wall-time bound is applied by the runner's `timeout` wrapper,
+      # so no per-prover timeout flag is needed here.
+      command_template: "apptainer exec {sif_path} simple_tableaux_solver --tptp-file {problem}",
       metadata: %{
         project: "item #12",
         integration: :cli,
         provider: __MODULE__,
         k8s_candidate?: true,
-        notes: "Replace command once the final CLI is fixed."
+        notes:
+          "CLI: `--tptp-file <path>` (symbolic/hybrid route decided by the solver heuristic)."
       }
     })
   end

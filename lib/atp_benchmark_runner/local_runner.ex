@@ -576,20 +576,12 @@ defmodule AtpBenchmarkRunner.LocalRunner do
          verbose
        ) do
     problem_id = Path.rootname(problem_path) |> Path.basename()
-    problem_basename = Path.basename(problem_path, ".p")
 
-    # Special handling for CVC5: convert TPTP → SMT-LIB before running
-    # Special handling for Lash: convert FOF/CNF/TFF → THF via Elixir TptpToTHF
+    # Special handling for Lash: convert FOF/CNF/TFF → THF via Elixir TptpToTHF.
+    # cvc5 reads TPTP natively (--lang tptp), so it uses the plain .p file like
+    # the other provers.
     {mount_dir, mount_file} =
       cond do
-        prover.name == :cvc5 ->
-          smt_content = AtpBenchmarkRunner.TPTPToSMT.convert_file!(problem_path)
-          smt_dir = AtpBenchmarkRunner.Config.smt_tmp_dir()
-          File.mkdir_p!(smt_dir)
-          smt_name = "#{problem_basename}.smt2"
-          File.write!(Path.join(smt_dir, smt_name), smt_content)
-          {docker_path(smt_dir), smt_name}
-
         prover.name == :lash ->
           thf_dir = AtpBenchmarkRunner.Config.thf_tmp_dir()
           File.mkdir_p!(thf_dir)

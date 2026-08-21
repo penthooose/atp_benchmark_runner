@@ -223,7 +223,7 @@ defmodule AtpBenchmarkRunnerTest do
     assert script =~ "#SBATCH --job-name=atp_run_single_single"
     assert script =~ "#SBATCH --partition=cpu"
     assert script =~ "#SBATCH --cpus-per-task=3"
-      assert script =~ ~r/export OMP_NUM_THREADS="\$\{SLURM_CPUS_PER_TASK:-1\}"/
+    assert script =~ ~r/export OMP_NUM_THREADS="\$\{SLURM_CPUS_PER_TASK:-1\}"/
     assert script =~ "export MKL_CBWR=AUTO"
     assert script =~ "TASKS_FILE='/work/atp/run_results/run_single/single_node_tasks.tsv'"
     assert script =~ "run_task \"$prover\" \"$problem_path\" \"$problem_id\" \"$command_b64\" &"
@@ -334,6 +334,31 @@ defmodule AtpBenchmarkRunnerTest do
     assert result.collected_at == "2026-06-01T12:00:00Z"
     assert result.szs_status == "Theorem"
     assert Result.from_map(persisted).memory_kb == 4096
+  end
+
+  test "parses SMT-LIB-style answers even when the job script appended GaveUp" do
+    # cvc5 (SMT-LIB mode) prints sat/unsat/unknown; the HPC job-script fallback
+    # appends "% SZS status GaveUp", which must not mask the real answer.
+    assert Result.parse_szs_status("sat\n% SZS status GaveUp for ALG001+0\n") == "Satisfiable"
+    assert Result.parse_szs_status("unsat\n% SZS status GaveUp for GRP001-0\n") == "Unsatisfiable"
+    assert Result.parse_szs_status("unknown\n% SZS status GaveUp for SET001^0\n") == "Unknown"
+  end
+
+  test "infers bare sat/unsat/unknown and tableaux status lines" do
+    # No explicit SZS line at all (no job-script fallback appended).
+    assert Result.parse_szs_status("sat\n") == "Satisfiable"
+    assert Result.parse_szs_status("unsat\n") == "Unsatisfiable"
+    assert Result.parse_szs_status("unknown\n") == "Unknown"
+
+    # AISE tableaux solver report wording.
+    assert Result.parse_szs_status("status: UNSAT\nmodel: -\n") == "Unsatisfiable"
+    assert Result.parse_szs_status("status: SAT\nmodel: p=true\n") == "Satisfiable"
+  end
+
+  test "keeps no-conjecture GaveUp refinement for refutation provers" do
+    # Leo3-style GaveUp on a satisfiability-only problem stays Satisfiable.
+    output = "% SZS status GaveUp\n% No conjecture found\n"
+    assert Result.parse_szs_status(output) == "Satisfiable"
   end
 
   test "parses sacct output for completed job monitoring" do

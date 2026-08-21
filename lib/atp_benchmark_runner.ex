@@ -466,7 +466,7 @@ defmodule AtpBenchmarkRunner do
             session = session_from_plan(plan)
 
             plan
-            |> AtpBenchmarkRunner.HPC.Runner.run(session)
+            |> AtpBenchmarkRunner.HPC.Runner.run(session, wait_for_completion: true)
             |> Map.fetch!(:results)
 
           _ ->

@@ -266,8 +266,6 @@ before launch, set `prepare_images: true` in the benchmark plan above.
 
 ---
 
-<!-- livebook:{"branch_parent_index":6} -->
-
 ## 7. Submit the run and collect results
 
 ```elixir
@@ -278,23 +276,31 @@ IO.puts("  Plan mode: #{plan.metadata[:hpc][:hpc_mode]}/#{plan.metadata[:hpc][:s
 IO.puts("  Partition: #{plan.metadata[:hpc][:partition]}")
 IO.puts("")
 
+
 {t_ms, results} =
 	:timer.tc(fn ->
-		AtpBenchmarkRunner.run_benchmark(plan)
+		try do
+			AtpBenchmarkRunner.run_benchmark(plan)
+		rescue
+			e ->
+				IO.puts("Benchmark failed: #{Exception.message(e)}")
+				[]
+		end
 	end)
 
-elapsed_s = t_ms / 1_000_000
-IO.puts("Benchmark completed in #{Float.round(elapsed_s, 2)}s")
-IO.puts("Total results: #{length(results)}")
+IO.puts("Cell finished in #{Float.round(t_ms / 1_000_000, 2)}s")
 ```
 
 ---
 
-<!-- livebook:{"branch_parent_index":6} -->
-
 ## 8. Results table
 
 ```elixir
+# Guard: if this cell is evaluated without section 7 having run (kernel restart
+# or an upstream edit invalidated the binding), fall back to an empty list
+# instead of crashing with "undefined variable results".
+results = binding()[:results] || []
+
 IO.puts("| # | Problem | Prover | SZS Status | Wall (ms) | Memory (KB) | Solved? |")
 IO.puts("|---|---------|--------|------------|-----------|-------------|---------|")
 

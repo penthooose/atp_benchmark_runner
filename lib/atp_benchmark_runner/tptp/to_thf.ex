@@ -218,19 +218,25 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
       |> Enum.reduce(sym, fn {name, arity, depth}, acc ->
         role = if depth == 0, do: :predicate, else: :function
         entry = %{arity: arity, role: role}
+
         case Map.get(acc, name) do
-          nil -> Map.put(acc, name, entry)
+          nil ->
+            Map.put(acc, name, entry)
+
           %{arity: existing} when arity > existing ->
             Map.put(acc, name, %{arity: arity, role: role})
+
           %{role: :function} = _existing when role == :predicate ->
             # Promote: if same symbol used as predicate, prefer predicate role
             Map.put(acc, name, entry)
-          _ -> acc
+
+          _ ->
+            acc
         end
       end)
 
-    {result, Map.keys(result) |> Enum.filter(&Map.get(result, &1).role == :predicate),
-     Map.keys(result) |> Enum.filter(&Map.get(result, &1).role == :function)}
+    {result, Map.keys(result) |> Enum.filter(&(Map.get(result, &1).role == :predicate)),
+     Map.keys(result) |> Enum.filter(&(Map.get(result, &1).role == :function))}
   end
 
   defp extract_all_applications(formula) do
@@ -259,7 +265,7 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
         %{type: :open, name: name, pos: pos, match_len: ml}, {acc, stack} ->
           depth = length(stack)
           # Extract args content
-          rest = String.slice(formula, pos + ml..-1//1)
+          rest = String.slice(formula, (pos + ml)..-1//1)
           args_str = extract_balanced_to_end(rest, 1)
           arity = count_top_args(args_str)
           {[{name, arity, depth} | acc], [pos | stack]}
@@ -275,15 +281,19 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
   end
 
   defp extract_balanced_to_end(<<"">>, _depth), do: ""
+
   defp extract_balanced_to_end(<<c::utf8, rest::binary>>, depth) do
     case c do
       c when c in ~c"([{" ->
         inner = extract_balanced_to_end(rest, depth + 1)
         <<c::utf8>> <> inner
+
       c when c in ~c")]}" and depth == 1 ->
         <<c::utf8>>
+
       c when c in ~c")]}" ->
         <<c::utf8>> <> extract_balanced_to_end(rest, depth - 1)
+
       _ ->
         <<c::utf8>> <> extract_balanced_to_end(rest, depth)
     end
@@ -291,6 +301,7 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
 
   defp count_top_args(args_str) do
     args_str = String.trim_trailing(args_str, ")") |> String.trim()
+
     if args_str == "" do
       0
     else
@@ -301,6 +312,7 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
   end
 
   defp count_commas_at_depth_0(<<"">>, _depth), do: 1
+
   defp count_commas_at_depth_0(<<c::utf8, rest::binary>>, depth) do
     case c do
       c when c in ~c"([{" -> count_commas_at_depth_0(rest, depth + 1)

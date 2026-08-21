@@ -21,7 +21,7 @@ defmodule AtpBenchmarkRunner.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      # Local path while item #15 is developed. Later replace with the public repo, e.g.:
+      # Local path while item #15 is developed. replace with the public repo, e.g.:
       # {:hpc_connect, github: "<aise-org-or-user>/hpc_connect", tag: "v0.1.0"}
       {:hpc_connect, path: "../../item_15_Elixir_HPC_Connect_Library/hpc_connect"},
       {:jason, "~> 1.4"},

@@ -89,6 +89,8 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
 
     #{diag}
 
+    #{szs_fallback_snippet()}
+
     PROVER=#{Shell.quote(prover_name)}
     PROBLEM_FILE=#{Shell.quote(paths.problem_list)}
     RESULT_DIR=#{Shell.quote(prover_results)}
@@ -110,11 +112,13 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
 
     START_EPOCH_MS=$(date +%s%3N)
 
-    # Run command in background and track peak RSS via ps monitoring loop
+    # Run command in background and track peak RSS via ps monitoring loop.
+    # Redirect stdin from /dev/null defensively (no task file is fed here, but
+    # it guarantees the prover never blocks on or consumes inherited stdin).
     PEAK_RSS_KB=0
     EXIT_STATUS=0
 
-    timeout --preserve-status "${TIMEOUT_SECONDS}s" bash -lc #{Shell.quote(command)} > "$OUT_FILE" 2>&1 &
+    timeout --preserve-status "${TIMEOUT_SECONDS}s" bash -lc #{Shell.quote(command)} < /dev/null > "$OUT_FILE" 2>&1 &
     CMD_PID=$!
 
     while kill -0 $CMD_PID 2>/dev/null; do
@@ -133,13 +137,7 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     MEMORY_KB=$PEAK_RSS_KB
     [ "$MEMORY_KB" -le 0 ] 2>/dev/null && MEMORY_KB=null
 
-    if ! grep -qi "SZS status" "$OUT_FILE"; then
-      if [ "$EXIT_STATUS" = "124" ] || [ "$EXIT_STATUS" = "137" ]; then
-        echo "% SZS status Timeout for ${PROBLEM_ID}" >> "$OUT_FILE"
-      else
-        echo "% SZS status GaveUp for ${PROBLEM_ID}" >> "$OUT_FILE"
-      fi
-    fi
+    write_szs_fallback "$OUT_FILE" "$EXIT_STATUS" "$PROBLEM_ID"
 
     printf '{"problem_id":"%s","prover":"%s","exit_status":%s,"wall_time_ms":%s,"memory_kb":%s,"output_path":"%s"}\n' \
       "$PROBLEM_ID" "$PROVER" "$EXIT_STATUS" "$WALL_TIME_MS" "$MEMORY_KB" "$OUT_FILE" > "$META_FILE"
@@ -150,15 +148,16 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
 
   @doc """
   Builds the TSV task list consumed by the single-node batch script.
-  For CVC5 provers, .p files are converted to .smt2 inline so the
-  container never sees TPTP input (modern cvc5 only speaks smt2/sygus2).
+  Only Lash needs a converted `_thf.p` input path; cvc5 reads TPTP natively
+  (`--lang tptp`) and every other prover consumes the raw `.p` file.
   """
   @spec single_node_tasks(Run.t(), keyword()) :: binary()
   def single_node_tasks(%Run{} = run, opts \\ []) do
     # Interleave by problem first so all provers get fair parallel starting slots.
     # Before (grouped): vampire/p1,vampire/p2,...,cvc5/p1,cvc5/p2,... — vampire fills all slots first.
     # After (interleaved): vampire/p1,cvc5/p1,eprover/p1,...,vampire/p2,cvc5/p2,... — fair across provers.
-    cvc5? = &(&1.name == :cvc5)
+    # cvc5 now reads TPTP natively (`--lang tptp`), so it consumes the .p file
+    # like every other prover. Only Lash needs a converted `_thf.p` input.
     lash? = &(&1.name == :lash)
 
     run.problems
@@ -168,16 +167,6 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
 
         problem_path =
           cond do
-            cvc5?.(prover) ->
-              raw = problem.path || problem.name
-
-              if String.ends_with?(raw, ".p") || String.ends_with?(raw, ".tptp") do
-                String.replace_suffix(raw, ".p", ".smt2")
-                |> String.replace_suffix(".tptp", ".smt2")
-              else
-                raw
-              end
-
             lash?.(prover) ->
               raw = problem.path || problem.name
 
@@ -282,6 +271,8 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
 
     #{diag}
 
+    #{szs_fallback_snippet()}
+
     RESULTS_DIR=#{Shell.quote(paths.results_dir)}
     TASKS_FILE=#{Shell.quote(paths.single_node_tasks)}
     MAX_PARALLEL=#{max_parallel}
@@ -317,8 +308,11 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
 
       start_epoch_ms=$(date +%s%3N)
 
-      # Run command in background, monitor peak RSS via ps
-      timeout --preserve-status "${TIMEOUT_SECONDS}s" bash -lc "$command" > "$out_file" 2>&1 &
+      # Run command in background, monitor peak RSS via ps.
+      # Redirect stdin from /dev/null so the apptainer subprocess does NOT
+      # consume the while-read loop's tasks file (otherwise only the first
+      # task ever runs — subsequent reads hit EOF).
+      timeout --preserve-status "${TIMEOUT_SECONDS}s" bash -lc "$command" < /dev/null > "$out_file" 2>&1 &
       cmd_pid=$!
 
       while kill -0 $cmd_pid 2>/dev/null; do
@@ -340,13 +334,7 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
         memory_kb=$peak_rss_kb
       fi
 
-      if ! grep -qi "SZS status" "$out_file"; then
-        if [ "$exit_status" = "124" ] || [ "$exit_status" = "137" ]; then
-          echo "% SZS status Timeout for ${problem_id}" >> "$out_file"
-        else
-          echo "% SZS status GaveUp for ${problem_id}" >> "$out_file"
-        fi
-      fi
+      write_szs_fallback "$out_file" "$exit_status" "$problem_id"
 
       printf '{"problem_id":"%s","prover":"%s","exit_status":%s,"wall_time_ms":%s,"memory_kb":%s,"output_path":"%s"}\n' \
         "$problem_id" "$prover" "$exit_status" "$wall_time_ms" "$memory_kb" "$out_file" > "$meta_file"
@@ -400,6 +388,48 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     Enum.reduce(replacements, prover.command_template, fn {placeholder, value}, acc ->
       String.replace(acc, placeholder, value)
     end)
+  end
+
+  # Shell helper that appends the correct SZS status line when a prover produced
+  # no explicit `SZS status` marker. Handles SMT-LIB-style answers (sat/unsat/
+  # unknown — e.g. cvc5 in non-TPTP mode) and the AISE tableaux solver's report
+  # wording (`status: UNSAT` / `status: SAT`). Without this, such provers would
+  # be mislabelled `GaveUp` by the fallback even when they solved the problem.
+  defp szs_fallback_snippet do
+    """
+    write_szs_fallback() {
+      local out_file="$1"
+      local exit_status="$2"
+      local problem_id="$3"
+      local ans
+
+      if grep -qi "SZS status" "$out_file"; then
+        return 0
+      fi
+      if [ "$exit_status" = "124" ] || [ "$exit_status" = "137" ]; then
+        echo "% SZS status Timeout for ${problem_id}" >> "$out_file"
+        return 0
+      fi
+      # cvc5 & friends print a bare sat/unsat/unknown result (SMT-LIB mode).
+      ans=$(grep -Eio '(^|[^a-z])(unsat|unknown)([^a-z]|$)' "$out_file" | tail -n 1)
+      case "$ans" in
+        *unsat*) echo "% SZS status Unsatisfiable for ${problem_id}" >> "$out_file"; return 0 ;;
+        *unknown*) echo "% SZS status Unknown for ${problem_id}" >> "$out_file"; return 0 ;;
+      esac
+      ans=$(grep -Eio '(^|[^a-z])(sat)([^a-z]|$)' "$out_file" | tail -n 1)
+      case "$ans" in
+        *sat*) echo "% SZS status Satisfiable for ${problem_id}" >> "$out_file"; return 0 ;;
+      esac
+      # AISE tableaux solver reports "status: UNSAT" / "status: SAT".
+      if grep -qE 'status:[[:space:]]*UNSAT' "$out_file"; then
+        echo "% SZS status Unsatisfiable for ${problem_id}" >> "$out_file"; return 0
+      fi
+      if grep -qE 'status:[[:space:]]*SAT' "$out_file"; then
+        echo "% SZS status Satisfiable for ${problem_id}" >> "$out_file"; return 0
+      fi
+      echo "% SZS status GaveUp for ${problem_id}" >> "$out_file"
+    }
+    """
   end
 
   @doc """

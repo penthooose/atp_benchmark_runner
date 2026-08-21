@@ -17,63 +17,140 @@ defmodule AtpBenchmarkRunner.HPC.Results do
   """
   @spec collect(HpcConnect.Session.t(), Run.t(), keyword()) :: [Result.t()]
   def collect(%HpcConnect.Session{} = session, %Run{} = run, opts \\ []) do
-    max_retries = Keyword.get(opts, :collect_max_retries, 10)
-    retry_delay_ms = Keyword.get(opts, :collect_retry_delay_ms, 5_000)
+    max_retries = Keyword.get(opts, :collect_max_retries, 30)
+    retry_delay_ms = Keyword.get(opts, :collect_retry_delay_ms, 10_000)
+    expected = expected_result_count(run, opts)
 
-    collect_with_retry(session, run, opts, max_retries, retry_delay_ms)
+    collect_with_retry(session, run, opts, max_retries, retry_delay_ms, expected)
   end
 
-  defp collect_with_retry(session, run, opts, 0, _delay) do
+  # The runner knows how many (prover × problem) results should exist. When an
+  # expected count is provided, collection keeps polling until that many result
+  # files are present instead of grabbing the first partial directory — this is
+  # what previously caused "only tableaux produced output" when collection raced
+  # ahead of a still-running job.
+  defp expected_result_count(%Run{} = run, opts) do
+    case Keyword.get(opts, :expected_results) do
+      count when is_integer(count) and count > 0 ->
+        count
+
+      _ ->
+        problems = Enum.count(run.problems)
+        provers = Enum.count(run.provers)
+        if problems > 0 and provers > 0, do: problems * provers, else: nil
+    end
+  end
+
+  defp collect_with_retry(session, run, opts, 0, _delay, _expected) do
     IO.puts("[Results] Max retries reached — returning partial results or empty")
-    {:ok, results} = try_collect(session, run, opts)
-    results
+
+    case try_collect(session, run, opts) do
+      {:ok, results} ->
+        results
+
+      {:error, reason} ->
+        IO.puts("[Results] Final collect attempt failed: #{truncate_text(reason, 240)}")
+        []
+    end
   end
 
-  defp collect_with_retry(session, run, opts, retries_left, delay_ms) do
+  defp collect_with_retry(session, run, opts, retries_left, delay_ms, expected) do
     result = try_collect(session, run, opts)
 
     case result do
       {:ok, results} when results != [] ->
-        results
+        if is_integer(expected) and length(results) < expected do
+          retry_note(
+            "[Results]",
+            "collected #{length(results)}/#{expected} results so far",
+            retries_left,
+            delay_ms
+          )
+
+          Process.sleep(delay_ms)
+
+          collect_with_retry(
+            session,
+            run,
+            opts,
+            retries_left - 1,
+            min(delay_ms * 2, 60_000),
+            expected
+          )
+        else
+          results
+        end
 
       {:ok, []} ->
-        IO.puts(
-          "[Results] No results found yet — #{retries_left} retries left, retrying in #{delay_ms}ms"
-        )
-
+        retry_note("[Results]", "no result files found yet", retries_left, delay_ms)
         Process.sleep(delay_ms)
-        collect_with_retry(session, run, opts, retries_left - 1, min(delay_ms * 2, 60_000))
+
+        collect_with_retry(
+          session,
+          run,
+          opts,
+          retries_left - 1,
+          min(delay_ms * 2, 60_000),
+          expected
+        )
 
       {:error, reason} ->
-        IO.puts(
-          "[Results] SSH error: #{reason} — #{retries_left} retries left, retrying in #{delay_ms}ms"
-        )
-
+        retry_note("[Results]", "SSH error", retries_left, delay_ms, reason)
         Process.sleep(delay_ms)
-        collect_with_retry(session, run, opts, retries_left - 1, min(delay_ms * 2, 60_000))
+
+        collect_with_retry(
+          session,
+          run,
+          opts,
+          retries_left - 1,
+          min(delay_ms * 2, 60_000),
+          expected
+        )
     end
   end
+
+  # Muted retry logging: a one-line note while many retries remain; the full
+  # (potentially huge) reason / command dump only when about to give up.
+  defp retry_note(label, kind, retries_left, delay_ms, detail \\ nil) do
+    detail_part =
+      if not is_nil(detail) and retries_left <= 2 do
+        " — #{truncate_text(detail, 240)}"
+      else
+        ""
+      end
+
+    IO.puts(
+      "#{label} #{kind}#{detail_part} — #{retries_left} retries left, retrying in #{delay_ms}ms"
+    )
+  end
+
+  defp truncate_text(text, max) when is_binary(text) do
+    if byte_size(text) > max, do: binary_part(text, 0, max) <> "…", else: text
+  end
+
+  defp truncate_text(text, _max), do: to_string(text)
 
   defp try_collect(session, run, opts) do
     paths = remote_paths(run, session, opts)
 
     IO.puts("[Results] Looking for results in: #{paths.results_dir}")
 
-    # Diagnostic: check what's on the cluster at this exact path
-    diag =
+    # Single bulk call: directory listing + result-file presence check. Marker is
+    # underscore-only — bash would choke on shell metacharacters (`<<<` is a
+    # here-string operator) and kill the persistent shell.
+    marker = "__HPC_RESULTS_CHECK__"
+
+    bulk =
       HpcConnect.connect!(
         session,
-        "ls -la #{Shell.quote(paths.results_dir)} 2>/dev/null || echo 'DIR_NOT_FOUND'"
+        "ls -la #{Shell.quote(paths.results_dir)} 2>/dev/null || echo 'DIR_NOT_FOUND'; " <>
+          "echo #{marker}; " <>
+          "find #{Shell.quote(paths.results_dir)} \\( -name '*.out' -o -name '*.meta.json' \\) 2>/dev/null | head -5"
       )
+
+    {diag, check} = split_on_marker(bulk, marker)
 
     IO.puts("[Results] ls output: #{String.slice(String.trim(diag), 0, 500)}")
-
-    # Check if directory has any .out or .meta.json files at all
-    check =
-      HpcConnect.connect!(
-        session,
-        "find #{Shell.quote(paths.results_dir)} -name '*.out' -o -name '*.meta.json' 2>/dev/null | head -5"
-      )
 
     if String.trim(check) == "" do
       IO.puts("[Results] No result files found (empty directories)")
@@ -86,6 +163,13 @@ defmodule AtpBenchmarkRunner.HPC.Results do
     e -> {:error, Exception.message(e)}
   end
 
+  defp split_on_marker(bulk, marker) do
+    case String.split(bulk, marker, parts: 2) do
+      [before, after_marker] -> {before, after_marker}
+      [before] -> {before, ""}
+    end
+  end
+
   # Tar the results directory on the cluster, SCP it back, extract locally
   defp collect_via_tar(session, results_dir, %Run{} = run, opts) do
     local_tmp = local_tmp_dir(opts)
@@ -96,21 +180,23 @@ defmodule AtpBenchmarkRunner.HPC.Results do
     dirname = posix_basename(results_dir)
     remote_tar = posix_join(parent, "results_#{run.id}.tar.gz")
 
-    # Step 1: create tar only if it doesn't already exist (from a previous retry)
-    tar_exists? =
-      HpcConnect.connect!(session, "test -f #{Shell.quote(remote_tar)} && echo yes || echo no")
-      |> String.trim() == "yes"
-
-    unless tar_exists? do
-      IO.puts("[Results] Creating tar on cluster: #{remote_tar}")
-
+    # Step 1: create the tar (unless already present from a previous retry) in a
+    # single SSH call — replaces the old test-then-create pair.
+    tar_status =
       HpcConnect.connect!(
         session,
-        "cd #{Shell.quote(parent)} && tar czf #{Shell.quote(remote_tar)} #{Shell.quote(dirname)} 2>/dev/null",
+        "if [ ! -f #{Shell.quote(remote_tar)} ]; then " <>
+          "cd #{Shell.quote(parent)} && tar czf #{Shell.quote(remote_tar)} #{Shell.quote(dirname)} 2>/dev/null " <>
+          "&& echo CREATED || echo FAILED; " <>
+          "else echo EXISTS; fi",
         Keyword.get(opts, :connect_opts, [])
       )
-    else
-      IO.puts("[Results] Tar already exists on cluster, skipping creation")
+      |> String.trim()
+
+    IO.puts("[Results] Tar status: #{tar_status}")
+
+    if tar_status == "FAILED" do
+      IO.puts("[Results] Tar creation failed (possible empty/absent results dir)")
     end
 
     # Step 2: download via SCP with its own retry + backoff
@@ -155,9 +241,7 @@ defmodule AtpBenchmarkRunner.HPC.Results do
         :ok
 
       {:error, reason} ->
-        IO.puts(
-          "[Results] SCP failed — #{retries_left} retries left, retrying in #{delay_ms}ms: #{String.slice(reason, 0, 200)}"
-        )
+        retry_note("[Results]", "SCP failed", retries_left, delay_ms, reason)
 
         Process.sleep(delay_ms)
 

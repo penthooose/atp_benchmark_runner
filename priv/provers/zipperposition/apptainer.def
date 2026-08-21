@@ -29,27 +29,48 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
       opam init --disable-sandboxing --compiler=ocaml-base-compiler.4.12.1 2>&1
     fi
     eval $(opam env)
+
+    # pkgconf bootstrap: opam's conf-pkg-config depext tries `apt-get`, which
+    # fails on FAU nodes (setgroups/setegid blocked in the user namespace).
+    # Compiling pkgconf from source keeps `opam install --no-depext` working.
+    cd /tmp && \
+    curl -fSL "https://distfiles.ariadne.space/pkgconf/pkgconf-1.9.5.tar.gz" -o pkgconf.tar.gz && \
+    tar --no-same-owner -xzf pkgconf.tar.gz && \
+    cd pkgconf-1.9.5 && \
+    ./configure --prefix=/usr/local && \
+    make -j$(nproc) && \
+    make install && \
+    ln -sf /usr/local/bin/pkgconf /usr/local/bin/pkg-config && \
+    ldconfig -n /usr/local/lib 2>/dev/null || true && \
+    pkg-config --version
+    cd / && rm -rf /tmp/pkgconf-1.9.5 /tmp/pkgconf.tar.gz
+
     opam update 2>&1 | tail -3
-    # Try latest, fall back to version 2.0 if latest isn't available for this OCaml
-    opam install -y zipperposition 2>&1 || \
-      opam install -y zipperposition.2.0 2>&1 || \
+    # --no-depext: do not run system depext commands (apt-get) — the required
+    # pkg-config is bootstrapped above. This is what previously made
+    # `opam install zipperposition` fail silently and leave the image without
+    # the binary ("executable file not found in $PATH" at runtime).
+    opam install -y --no-depext zipperposition 2>&1 || \
+      opam install -y --no-depext zipperposition.2.0 2>&1 || \
       echo "WARNING: Could not install zipperposition via opam" >&2
-    # Search for the binary (check both possible opam roots).
-    # -maxdepth 4 misses /home/opam/.opam/4.12/bin/zipperposition (depth 5),
-    # so use -maxdepth 5 or just search without depth limit.
+    # Search for the binary (check both possible opam roots), including the
+    # switch's bin dir. -maxdepth 4 misses /home/opam/.opam/4.12/bin/zipperposition
+    # (depth 6), so use a depth-free search plus `opam exec -- which`.
     found=""
-    for dir in /home/opam/.opam /root/.opam; do
-      found="$(find "$dir" -maxdepth 5 -type f -name zipperposition 2>/dev/null | head -1)"
-      if [ -n "$found" ]; then break; fi
-    done
+    found="$(opam exec -- which zipperposition 2>/dev/null || true)"
+    if [ -z "$found" ]; then
+      for dir in /home/opam/.opam /root/.opam; do
+        found="$(find "$dir" -type f -name zipperposition 2>/dev/null | head -1)"
+        if [ -n "$found" ]; then break; fi
+      done
+    fi
     if [ -n "$found" ]; then
       ln -sf "$found" /usr/local/bin/zipperposition
       echo "Linked zipperposition from $found"
     else
       echo "WARNING: zipperposition binary not found after opam install" >&2
-      # Fallback: try the known installed location directly
-      for dir in /home/opam/.opam /root/.opam; do
-        candidate="$dir/4.12/bin/zipperposition"
+      # Fallback: try the known installed locations directly
+      for candidate in /home/opam/.opam/4.12/bin/zipperposition /root/.opam/4.12/bin/zipperposition; do
         if [ -f "$candidate" ]; then
           ln -sf "$candidate" /usr/local/bin/zipperposition
           echo "Linked zipperposition from fallback path $candidate"
@@ -60,6 +81,9 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     fi
     if [ -n "$found" ]; then
       /usr/local/bin/zipperposition --help >/dev/null 2>&1 && echo "zipperposition --help: OK" || true
+    else
+      echo "FATAL: zipperposition is not installed in this image — the benchmark will fail." >&2
+      exit 1
     fi
 
 %environment

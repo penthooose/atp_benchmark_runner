@@ -278,27 +278,11 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
   end
 
   defp sync_problems(%Run{} = run, %HpcConnect.Session{} = session, hpc) do
-    # Pre-convert problems for provers that need it (CVC5 → SMT, Lash → THF)
-    # This must happen before syncing because the converted files need to be
-    # uploaded to the vault alongside the originals.
+    # Pre-convert problems for provers that need it. cvc5 reads TPTP natively
+    # now (no SMT-LIB conversion). Only Lash needs a THF conversion, and it must
+    # happen before syncing so the converted files are uploaded alongside the
+    # originals.
     Enum.each(run.provers, fn prover ->
-      if prover.name == :cvc5 do
-        Enum.each(run.problems, fn problem ->
-          if local_file?(problem) and
-               (String.ends_with?(problem.path, ".p") and
-                  not String.ends_with?(problem.path, "_thf.p")) do
-            smt_content = AtpBenchmarkRunner.TPTPToSMT.convert_file!(problem.path)
-
-            smt_path =
-              problem.path
-              |> String.replace_suffix(".p", ".smt2")
-              |> String.replace_suffix(".tptp", ".smt2")
-
-            File.write!(smt_path, smt_content)
-          end
-        end)
-      end
-
       if prover.name == :lash do
         Enum.each(run.problems, fn problem ->
           if local_file?(problem) and

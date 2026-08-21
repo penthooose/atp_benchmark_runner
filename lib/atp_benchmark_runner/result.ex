@@ -146,8 +146,46 @@ defmodule AtpBenchmarkRunner.Result do
            output,
            capture: :all_but_first
          ) do
-      [status] -> refine_status(status, output)
+      [status] -> refine_explicit_status(status, output)
       _ -> infer_error_status(output)
+    end
+  end
+
+  # Prefer a genuine plain-language answer over a fallback-appended status.
+  # The HPC job scripts append `% SZS status GaveUp` (or Timeout) when a prover
+  # emits no explicit SZS line; SMT-LIB-style provers such as cvc5 print a bare
+  # `sat`/`unsat`/`unknown` answer that must win over that appended line, and
+  # the AISE tableaux solver reports `status: UNSAT` / `status: SAT`.
+  defp refine_explicit_status(status, output) when status in ["GaveUp", "Timeout"] do
+    case plain_answer(output) do
+      nil -> refine_status(status, output)
+      answer -> answer
+    end
+  end
+
+  defp refine_explicit_status(status, output), do: refine_status(status, output)
+
+  # Map a bare SMT-LIB / tableaux answer token to an SZS status, or nil.
+  # `unsatisfiable` contains `satisfiable`, so the unsat branch must come first.
+  defp plain_answer(output) do
+    lower = String.downcase(output)
+
+    cond do
+      Regex.match?(~r/(^|\n)\s*unsat\s*($|\n)/, lower) or
+        Regex.match?(~r/status:[ \t]*unsat\b/, lower) or
+          Regex.match?(~r/(^|[^a-z])unsatisfiable([^a-z]|$)/, lower) ->
+        "Unsatisfiable"
+
+      Regex.match?(~r/(^|\n)\s*sat\s*($|\n)/, lower) or
+        Regex.match?(~r/status:[ \t]*sat\b/, lower) or
+          Regex.match?(~r/(^|[^a-z])satisfiable([^a-z]|$)/, lower) ->
+        "Satisfiable"
+
+      Regex.match?(~r/(^|\n)\s*unknown\s*($|\n)/, lower) ->
+        "Unknown"
+
+      true ->
+        nil
     end
   end
 
@@ -200,8 +238,10 @@ defmodule AtpBenchmarkRunner.Result do
               String.contains?(lower, "does not exist") ->
             "InputError"
 
+          # No crash pattern: fall back to a bare sat/unsat/unknown answer
+          # (cvc5 in SMT-LIB mode, AISE tableaux report wording, etc.).
           true ->
-            nil
+            plain_answer(output)
         end
     end
   end

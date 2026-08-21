@@ -192,7 +192,27 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     # Targeted cleanup only — avoid rm -rf /tmp/* which can hit mounted directories
     rm -rf /tmp/leo2.tgz 2>/dev/null || true
 
+    # Runtime shared libraries: copy every .so the leo binary references that is
+    # NOT in a standard loader directory into /usr/local/lib, then refresh the
+    # loader cache. Fixes apptainer exec failing with
+    # "exec /usr/local/bin/leo failed: a shared library is likely missing in the image"
+    # when OCaml stublibs / opam libs are not on the runtime LD_LIBRARY_PATH.
+    mkdir -p /usr/local/lib
+    for f in $(ldd /usr/local/bin/leo 2>/dev/null | awk '/=>/ {print $3}' | grep -Ev '^/(lib|lib64|usr/lib|usr/lib64)/' | sort -u); do
+      if [ -n "$f" ] && [ -f "$f" ]; then
+        cp -n "$f" /usr/local/lib/ 2>/dev/null || true
+      fi
+    done
+    ldconfig 2>/dev/null || true
+    ldd /usr/local/bin/leo 2>/dev/null | head -20 || true
+
+%environment
+    export OPAMROOT=/home/opam/.opam
+    export PATH=/usr/local/bin:/usr/bin:/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/lib:/home/opam/.opam/4.12/lib/ocaml/stublibs:/home/opam/.opam/4.12/lib/ocaml:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}
+
 %runscript
+    export LD_LIBRARY_PATH=/usr/local/lib:/home/opam/.opam/4.12/lib/ocaml/stublibs:/home/opam/.opam/4.12/lib/ocaml:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}
     exec leo "$@"
 
 %help

@@ -91,9 +91,7 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
       local_file?(problem) ->
         remote_path = remote_problem_path(problem, root)
 
-        if MapSet.member?(existing, remote_path) do
-          mark_synced(problem, remote_path)
-        else
+        unless MapSet.member?(existing, remote_path) do
           RemoteFiles.mkdir_p!(session, posix_dirname(remote_path), opts)
 
           # Upload the original problem file
@@ -101,13 +99,15 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
             normalize_line_endings: :lf,
             normalize_extensions: [".p", ".ax"]
           )
-
-          # Also upload converted versions needed by specific provers
-          upload_converted!(session, problem.path, remote_path, ".smt2", opts)
-          upload_thf_converted!(session, problem.path, remote_path, opts)
-
-          mark_synced(problem, remote_path)
         end
+
+        # Converted versions needed by specific provers are uploaded
+        # independently: on a rerun the original .p may already be remote while
+        # a freshly generated .smt2 / _thf.p conversion is still missing.
+        upload_converted!(session, problem.path, remote_path, ".smt2", existing, opts)
+        upload_thf_converted!(session, problem.path, remote_path, existing, opts)
+
+        mark_synced(problem, remote_path)
 
       already_remote?(problem) ->
         problem
@@ -117,8 +117,8 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
     end
   end
 
-  # Upload a .smt2 conversion if it exists (generated for CVC5)
-  defp upload_converted!(session, local_path, remote_path, ext, _opts) do
+  # Upload a .smt2 conversion if it exists and is not already remote.
+  defp upload_converted!(session, local_path, remote_path, ext, existing, opts) do
     converted =
       local_path
       |> String.replace_suffix(".p", ext)
@@ -130,15 +130,19 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
         |> String.replace_suffix(".p", ext)
         |> String.replace_suffix(".tptp", ext)
 
-      HpcConnect.SSH.upload!(session, converted, remote_converted,
-        normalize_line_endings: :lf,
-        normalize_extensions: [ext]
-      )
+      unless MapSet.member?(existing, remote_converted) do
+        RemoteFiles.mkdir_p!(session, posix_dirname(remote_converted), opts)
+
+        HpcConnect.SSH.upload!(session, converted, remote_converted,
+          normalize_line_endings: :lf,
+          normalize_extensions: [ext]
+        )
+      end
     end
   end
 
-  # Upload a _thf.p converted file if it exists (generated for Lash)
-  defp upload_thf_converted!(session, local_path, remote_path, _opts) do
+  # Upload a _thf.p converted file if it exists and is not already remote.
+  defp upload_thf_converted!(session, local_path, remote_path, existing, opts) do
     thf_local =
       local_path
       |> String.replace_suffix(".p", "_thf.p")
@@ -150,10 +154,14 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
         |> String.replace_suffix(".p", "_thf.p")
         |> String.replace_suffix(".tptp", "_thf.p")
 
-      HpcConnect.SSH.upload!(session, thf_local, thf_remote,
-        normalize_line_endings: :lf,
-        normalize_extensions: [".p"]
-      )
+      unless MapSet.member?(existing, thf_remote) do
+        RemoteFiles.mkdir_p!(session, posix_dirname(thf_remote), opts)
+
+        HpcConnect.SSH.upload!(session, thf_local, thf_remote,
+          normalize_line_endings: :lf,
+          normalize_extensions: [".p"]
+        )
+      end
     end
   end
 

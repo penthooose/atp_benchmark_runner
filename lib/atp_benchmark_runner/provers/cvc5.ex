@@ -16,12 +16,14 @@ defmodule AtpBenchmarkRunner.Provers.CVC5 do
       kind: :apptainer,
       sif_name: "cvc5",
       executable: "cvc5",
-      # No --threads: cvc5 doesn't expose a thread-count CLI flag.
-      # --tlimit is the wall-time limit in milliseconds.
-      # The .smt2 conversion is done by the runner before cvc5 is called.
-      command_template: "apptainer exec {sif_path} cvc5 --tlimit={timeout_ms} {problem}",
+      # cvc5 parses TPTP (FOF/CNF/TFF/THF) natively — feed the .p file directly
+      # and it emits SZS status lines. --tlimit is the wall-time limit in ms.
+      # (The previous TPTP→SMT-LIB conversion was not robust on real TPTP
+      # problems and cvc5's bare sat/unsat answers were masked as GaveUp.)
+      command_template:
+        "apptainer exec {sif_path} cvc5 --tlimit={timeout_ms} --lang tptp {problem}",
       metadata: %{
-        logics: ["SMT-LIB", "TPTP where supported by cvc5 parser"],
+        logics: ["TPTP (FOF, CNF, TFF, THF) — native parser"],
         integration: :cli,
         provider: __MODULE__,
         native_apis: ["C++", "Python", "Java", "Rust community binding"],
