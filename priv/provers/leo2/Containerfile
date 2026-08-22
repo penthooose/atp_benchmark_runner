@@ -13,15 +13,19 @@ RUN rm -f /usr/share/opam/sandbox.sh 2>/dev/null || true
 ENV OPAMYES=1
 RUN eval $(opam env) && opam install -y ocamlfind camlp5 camlp4
 
-# Download and extract LEO-II
-RUN curl -fSL "http://page.mi.fu-berlin.de/cbenzmueller/leo/leo2_v1.7.0.tgz" -o /tmp/leo2.tgz && \
-    mkdir -p /opt/leo2 && \
-    tar -xzf /tmp/leo2.tgz -C /opt/leo2 --strip-components=1
+# The leo2_v1.7.0.tgz on the LEO-II website is now a Git LFS pointer, not a
+# real tarball, so curl+tar fails. Clone the archived GitHub repo instead — the
+# v1.7.0 tag is the same source the tarball used to ship.
+RUN git clone --depth 1 --branch v1.7.0 https://github.com/leoprover/LEO-II.git /opt/leo2 2>/dev/null || \
+    git clone --depth 1 https://github.com/leoprover/LEO-II.git /opt/leo2
 
 WORKDIR /opt/leo2/src
 
-# OCaml 4.12 bytes/string compat: patch read_file to return string
-RUN sed -i 's/read_file file_out in/Bytes.to_string (read_file file_out) in/g' calculus/automation.ml
+# OCaml 4.12 bytes/string compat: the repo adds `module Bytes = String`, which
+# makes Bytes.to_string resolve to the non-existent String.to_string. Drop the
+# alias, then wrap read_file call sites to convert bytes -> string.
+RUN sed -i '/^module Bytes = String$/d' calculus/automation.ml && \
+    sed -i 's/read_file file_out in/Bytes.to_string (read_file file_out) in/g' calculus/automation.ml
 
 # GCC compat: old MiniSat code needs -fpermissive
 RUN sed -i 's|cd ../lib/minisat;|cd ../lib/minisat; export CFLAGS="-Wall -Wno-parentheses -fPIC -fpermissive";|' Makefile && \
@@ -43,14 +47,21 @@ COPY --from=builder /usr/local/bin/leo /usr/local/bin/leo
 # Leo bytecode links against dllminisatinterface.so at build-time paths
 COPY --from=builder /opt/leo2/src/interfaces/minisat/dllminisatinterface.so /opt/leo2/src/interfaces/minisat/dllminisatinterface.so
 # LEO-II is a cooperative prover — needs E-Prover as first-order backend.
+# LEO-II 1.7.0 calls E with `-t <seconds>` (E <= 1.9 CPU-time flag); E 2.x
+# redefined `-t` as --term-ordering, so the latest E fails with "Option -t
+# requires LPO, LPO4, KBO or KBO6". Pin E-1-9-1 (plain `eprover`, no eprover-ho).
 RUN apt-get update -qq && apt-get install -y -qq ca-certificates git build-essential gawk make perl && rm -rf /var/lib/apt/lists/* && \
-    git clone --depth 1 https://github.com/eprover/eprover.git /opt/eprover && \
+    git clone --depth 1 --branch E-1-9-1 https://github.com/eprover/eprover.git /opt/eprover && \
     cd /opt/eprover && \
-    ./configure --enable-ho --bindir=/usr/local/bin && \
-    make rebuild && make install && \
-    ln -sf eprover-ho /usr/local/bin/eprover && \
+    # E 1.9.1 ships Makefile.vars with CC = gcc-4 (its dev default); Ubuntu 22.04
+    # has no gcc-4, so make depend fails and eprover never builds. Force CC = gcc.
+    sed -i 's/^CC[[:space:]]*=[[:space:]]*gcc-4/CC = gcc/' Makefile.vars && \
+    ./configure --bindir=/usr/local/bin && \
+    make && make install && \
     rm -rf /opt/eprover
-# Create ATP config so Leo2 can find E-Prover
-RUN echo 'e = /usr/local/bin/eprover' > /home/opam/.leoatprc && \
+# Create ATP config so Leo2 can find E-Prover. The local container runs as root
+# (HOME=/root), so write the config there too (the opam copy covers non-root runs).
+RUN echo 'e = /usr/local/bin/eprover' > /root/.leoatprc && \
+    echo 'e = /usr/local/bin/eprover' > /home/opam/.leoatprc && \
     chown opam:opam /home/opam/.leoatprc
 ENTRYPOINT ["/usr/local/bin/leo"]

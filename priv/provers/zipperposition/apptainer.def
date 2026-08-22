@@ -41,18 +41,45 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     make -j$(nproc) && \
     make install && \
     ln -sf /usr/local/bin/pkgconf /usr/local/bin/pkg-config && \
+    export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}" && \
     ldconfig -n /usr/local/lib 2>/dev/null || true && \
     pkg-config --version
     cd / && rm -rf /tmp/pkgconf-1.9.5 /tmp/pkgconf.tar.gz
 
-    opam update 2>&1 | tail -3
-    # --no-depext: do not run system depext commands (apt-get) — the required
-    # pkg-config is bootstrapped above. This is what previously made
-    # `opam install zipperposition` fail silently and leave the image without
-    # the binary ("executable file not found in $PATH" at runtime).
-    opam install -y --no-depext zipperposition 2>&1 || \
-      opam install -y --no-depext zipperposition.2.0 2>&1 || \
-      echo "WARNING: Could not install zipperposition via opam" >&2
+    # logtk (a zipperposition dependency) requires zarith, and zarith needs
+    # libgmp. apt-get is unavailable in the rootless build, so compile gmp from
+    # source only if the base image does not already provide it.
+    if ! { ls /usr/include/gmp.h /usr/include/x86_64-linux-gnu/gmp.h 2>/dev/null | grep -q . || ldconfig -p 2>/dev/null | grep -q 'libgmp.so'; }; then
+      cd /tmp && \
+      curl -fSL "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz" -o gmp.tar.xz && \
+      tar -xJf gmp.tar.xz && \
+      cd gmp-6.3.0 && \
+      ./configure --prefix=/usr/local && \
+      make -j$(nproc) && \
+      make install && \
+      cd / && rm -rf /tmp/gmp-6.3.0 /tmp/gmp.tar.xz
+    fi
+    export CPPFLAGS="-I/usr/local/include ${CPPFLAGS:-}"
+    export LDFLAGS="-L/usr/local/lib ${LDFLAGS:-}"
+    export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export OPAMYES=1
+
+    # --no-depext (opam >= 2.1): do not run system depext commands (apt-get) —
+    # pkg-config and gmp are bootstrapped above. The flag is unsupported on
+    # opam 2.0, so gate it on the version. `opam update` is intentionally NOT
+    # run: the image's pinned repo already contains zipperposition 2.0/2.1, and
+    # a refresh would pull menhir >= 20211215 which zipperposition excludes.
+    if opam --version | grep -Eq '^2\.[123]'; then
+      opam install --no-depext zipperposition 2>&1 || \
+        opam install --no-depext zipperposition.2.1 2>&1 || \
+        opam install --no-depext zipperposition.2.0 2>&1 || \
+        { echo "WARNING: Could not install zipperposition via opam" >&2; true; }
+    else
+      opam install zipperposition 2>&1 || \
+        opam install zipperposition.2.1 2>&1 || \
+        opam install zipperposition.2.0 2>&1 || \
+        { echo "WARNING: Could not install zipperposition via opam" >&2; true; }
+    fi
     # Search for the binary (check both possible opam roots), including the
     # switch's bin dir. -maxdepth 4 misses /home/opam/.opam/4.12/bin/zipperposition
     # (depth 6), so use a depth-free search plus `opam exec -- which`.
@@ -86,9 +113,47 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
       exit 1
     fi
 
+    # ---------------------------------------------------------------------------
+    # Runtime relocation of the opam switch.
+    #
+    # The ocaml/opam base image keeps its switch at /home/opam/.opam, but the
+    # cluster bind-mounts the HOST /home into every container, which HIDES the
+    # image's /home/opam at runtime. Symlinks pointing into the switch (e.g.
+    # /usr/local/bin/zipperposition -> /home/opam/.opam/4.12/bin/...) then
+    # dangle and exec fails with "no such file or directory". Move the switch
+    # to /opt/opam (inside the image root, never bound from the host) and
+    # re-point the symlink.
+    # ---------------------------------------------------------------------------
+    mkdir -p /opt
+    for src in /home/opam/.opam /root/.opam; do
+      if [ -d "$src" ] && [ ! -d /opt/opam ]; then
+        mv "$src" /opt/opam
+      fi
+    done
+    if [ -d /opt/opam ]; then
+      echo "Relocated opam switch to /opt/opam"
+      zp_bin="$(ls -d /opt/opam/*/bin/zipperposition 2>/dev/null | head -1)"
+      if [ -n "$zp_bin" ]; then
+        ln -sfn "$zp_bin" /usr/local/bin/zipperposition
+        echo "Re-pointed /usr/local/bin/zipperposition -> $zp_bin"
+      fi
+      # OCaml native binaries dlopen() their C stub libraries (dll*.so) at
+      # runtime via CAML_LD_LIBRARY_PATH; also copy them into /usr/local/lib as
+      # a fallback so the binary works even if that env var is not set.
+      cp -n /opt/opam/*/lib/ocaml/stublibs/dll*.so /usr/local/lib/ 2>/dev/null || true
+      cp -n /opt/opam/*/lib/ocaml/dll*.so /usr/local/lib/ 2>/dev/null || true
+      ldconfig 2>/dev/null || true
+    else
+      echo "WARNING: no opam switch found to relocate" >&2
+    fi
+
 %environment
-    export OPAMROOT=/home/opam/.opam
-    export PATH=/usr/local/bin:/home/opam/.opam/4.12/bin:$PATH
+    export OPAMROOT=/opt/opam
+    export PATH=/usr/local/bin:/opt/opam/4.12/bin:$PATH
+    export CAML_LD_LIBRARY_PATH=/usr/local/lib:/opt/opam/4.12/lib/ocaml/stublibs
+    export LD_LIBRARY_PATH=/usr/local/lib:/opt/opam/4.12/lib/stublibs:/opt/opam/4.12/lib/ocaml/stublibs:${LD_LIBRARY_PATH:-}
 
 %runscript
+    export CAML_LD_LIBRARY_PATH=/usr/local/lib:/opt/opam/4.12/lib/ocaml/stublibs
+    export LD_LIBRARY_PATH=/usr/local/lib:/opt/opam/4.12/lib/stublibs:/opt/opam/4.12/lib/ocaml/stublibs:${LD_LIBRARY_PATH:-}
     exec zipperposition "$@"

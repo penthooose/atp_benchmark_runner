@@ -1,9 +1,14 @@
 # AISE Tableaux Solver container image (Elixir escript build).
 #   docker build -t docker.io/aise/simple-tableaux-solver:latest priv/provers/tableaux/
-#   docker run --rm docker.io/aise/simple-tableaux-solver:latest solve /problems/problem.p --timeout 30
+#   docker run --rm docker.io/aise/simple-tableaux-solver:latest --tptp-file /problems/problem.p
 FROM docker.io/hexpm/elixir:1.17.3-erlang-27.1-debian-bookworm-20240904-slim AS builder
 
-ARG TABLEAUX_REPO=https://github.com/ase-build/simple_tableaux_solver.git
+# The escript CLI takes `--tptp-file <path>` (no `solve` subcommand, no
+# `--timeout` flag — the runner's `timeout` wrapper bounds wall time).
+# Source repo: same one the Apptainer .def uses. The old
+# ase-build/simple_tableaux_solver default did not exist (clone failed with
+# "could not read Username for 'https://github.com'").
+ARG TABLEAUX_REPO=https://github.com/penthooose/hybrid_tableaux_solver.git
 ARG TABLEAUX_REF=main
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -17,9 +22,10 @@ WORKDIR /opt/simple_tableaux_solver
 RUN mix deps.get && MIX_ENV=prod mix escript.build && \
     install -m 0755 simple_tableaux_solver /usr/local/bin/simple_tableaux_solver
 
-FROM docker.io/debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# The escript shebang is `#!/usr/bin/env escript`, so the runtime stage must
+# keep an Erlang installation (the hexpm/elixir base — same as the builder and
+# the Apptainer def). A bare debian-slim runtime fails with
+# "/usr/bin/env: 'escript': No such file or directory".
+FROM docker.io/hexpm/elixir:1.17.3-erlang-27.1-debian-bookworm-20240904-slim
 COPY --from=builder /usr/local/bin/simple_tableaux_solver /usr/local/bin/simple_tableaux_solver
-ENTRYPOINT ["simple_tableaux_solver"]
+ENTRYPOINT ["/usr/local/bin/simple_tableaux_solver"]

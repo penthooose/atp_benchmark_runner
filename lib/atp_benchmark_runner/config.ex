@@ -12,7 +12,7 @@ defmodule AtpBenchmarkRunner.Config do
   @store_dir_var "ATP_BENCHMARK_RUNNER_STORE_DIR"
   @cache_dir_var "ATP_BENCHMARK_RUNNER_CACHE_DIR"
   @smt_tmp_dir_var "ATP_BENCHMARK_RUNNER_SMT_TMP_DIR"
-  @thf_tmp_dir_var "ATP_BENCHMARK_RUNNER_THF_TMP_DIR"
+  @thf_tmp_dir_var "ATP_BENCHMARK_RUNNER_SMT_THF_DIR"
   @bundled_examples_dir_var "ATP_BENCHMARK_RUNNER_BUNDLED_EXAMPLES_DIR"
   @user_examples_dir_var "ATP_BENCHMARK_RUNNER_USER_EXAMPLES_DIR"
   @single_download_dir_var "ATP_BENCHMARK_RUNNER_SINGLE_DOWNLOAD_DIR"
@@ -84,8 +84,8 @@ defmodule AtpBenchmarkRunner.Config do
   @doc """
   Returns the temporary directory used for TPTP-to-THF converted files.
 
-  Configure via `ATP_BENCHMARK_RUNNER_THF_TMP_DIR` env var or the `:thf_tmp_dir` option.
-  Falls back to `./tmp/thf_converted`.  Set `ATP_BENCHMARK_RUNNER_THF_TMP_DIR` to override.
+  Configure via `ATP_BENCHMARK_RUNNER_SMT_THF_DIR` env var or the `:thf_tmp_dir`
+  option. Falls back to `./tmp/thf_converted`.
   """
   @spec thf_tmp_dir(keyword()) :: binary()
   def thf_tmp_dir(opts \\ []) do

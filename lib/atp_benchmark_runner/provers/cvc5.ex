@@ -16,14 +16,17 @@ defmodule AtpBenchmarkRunner.Provers.CVC5 do
       kind: :apptainer,
       sif_name: "cvc5",
       executable: "cvc5",
-      # cvc5 parses TPTP (FOF/CNF/TFF/THF) natively — feed the .p file directly
-      # and it emits SZS status lines. --tlimit is the wall-time limit in ms.
-      # (The previous TPTP→SMT-LIB conversion was not robust on real TPTP
-      # problems and cvc5's bare sat/unsat answers were masked as GaveUp.)
+      # cvc5's `--lang` has NO TPTP input dialect (only smt2/smtlib, smt2-tptp,
+      # sygus) — problems must be converted to SMT-LIB first, which the runner
+      # does via TPTPToSMT before the .smt2 file is mounted. cvc5 then emits a
+      # bare sat/unsat/unknown answer, mapped to Satisfiable/Unsatisfiable/
+      # Unknown by the runner's SZS fallback. --tlimit is wall time in ms;
+      # --finite-model-find matches cvc5's own TPTP regression config (helps
+      # find models for satisfiable quantified problems).
       command_template:
-        "apptainer exec {sif_path} cvc5 --tlimit={timeout_ms} --lang tptp {problem}",
+        "apptainer exec {sif_path} cvc5 --tlimit={timeout_ms} --finite-model-find {problem}",
       metadata: %{
-        logics: ["TPTP (FOF, CNF, TFF, THF) — native parser"],
+        logics: ["FOF/CNF/TFF/THF via TPTP→SMT-LIB conversion"],
         integration: :cli,
         provider: __MODULE__,
         native_apis: ["C++", "Python", "Java", "Rust community binding"],

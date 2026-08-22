@@ -12,10 +12,17 @@ defmodule AtpBenchmarkRunner.Store do
 
   @doc """
   Returns the configured cache/store directory.
+
+  Checks `ATP_BENCHMARK_RUNNER_STORE_DIR` first (the documented variable, set in
+  `.env` and used by `Config.store_dir/1`), then the legacy
+  `ATP_BENCHMARK_RUNNER_CACHE_DIR`, then application env, then the workspace
+  default. Previously this only read `CACHE_DIR`, so `save_run!/1` and friends
+  wrote to the CWD-relative default even when `STORE_DIR` was configured.
   """
   @spec default_dir() :: binary()
   def default_dir do
-    System.get_env("ATP_BENCHMARK_RUNNER_CACHE_DIR") ||
+    System.get_env("ATP_BENCHMARK_RUNNER_STORE_DIR") ||
+      System.get_env("ATP_BENCHMARK_RUNNER_CACHE_DIR") ||
       Application.get_env(:atp_benchmark_runner, :store_dir) ||
       Path.expand("./tmp/atp_benchmark_runner_store")
   end

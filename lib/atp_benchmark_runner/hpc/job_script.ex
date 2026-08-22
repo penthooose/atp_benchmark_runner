@@ -156,8 +156,9 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     # Interleave by problem first so all provers get fair parallel starting slots.
     # Before (grouped): vampire/p1,vampire/p2,...,cvc5/p1,cvc5/p2,... — vampire fills all slots first.
     # After (interleaved): vampire/p1,cvc5/p1,eprover/p1,...,vampire/p2,cvc5/p2,... — fair across provers.
-    # cvc5 now reads TPTP natively (`--lang tptp`), so it consumes the .p file
-    # like every other prover. Only Lash needs a converted `_thf.p` input.
+    # cvc5 needs SMT-LIB input (TPTP→SMT2 pre-conversion) and Lash needs a
+    # converted `_thf.p`; all other provers consume the raw `.p` file.
+    cvc5? = &(&1.name == :cvc5)
     lash? = &(&1.name == :lash)
 
     run.problems
@@ -167,6 +168,16 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
 
         problem_path =
           cond do
+            cvc5?.(prover) ->
+              raw = problem.path || problem.name
+
+              if String.ends_with?(raw, ".p") || String.ends_with?(raw, ".tptp") do
+                String.replace_suffix(raw, ".p", ".smt2")
+                |> String.replace_suffix(".tptp", ".smt2")
+              else
+                raw
+              end
+
             lash?.(prover) ->
               raw = problem.path || problem.name
 

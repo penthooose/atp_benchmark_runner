@@ -1,6 +1,7 @@
 # CVC5 container image (downloads latest GitHub release binary).
 #   docker build -t docker.io/aise/atp-cvc5:latest priv/provers/cvc5/
-#   docker run --rm docker.io/aise/atp-cvc5:latest --lang=tptp --tlimit=30000 /problems/problem.p
+#   docker run --rm docker.io/aise/atp-cvc5:latest --tlimit=30000 --finite-model-find /problems/problem.smt2
+#   (cvc5 has no TPTP input dialect — problems are converted to SMT-LIB first.)
 FROM docker.io/ubuntu:24.04 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

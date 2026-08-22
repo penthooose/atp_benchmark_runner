@@ -1,80 +1,52 @@
 defmodule AtpBenchmarkRunner.TPTP.ToTHF do
   @moduledoc """
-  Converts FOF/CNF/TFF TPTP problems to THF (typed higher-order form).
+  Converts FOF/CNF/TFF TPTP problems to THF for Lash, a TH0 higher-order
+  prover.
+
+  Lash rejects raw FOF and, unlike most provers, requires:
+    * explicit `@`-application (`(multiply @ X @ Y)`, not `multiply(X, Y)`),
+    * correctly typed `$i`/`$o` declarations (functions/constants return `$i`,
+      predicates return `$o`, quantified FO variables are `$i`),
+    * equations parenthesized (`((l) = (r))`) because Lash binds `=` tighter
+      than `@` (e.g. `identity @ X = X` is read as `identity @ (X = X)`).
+
+  This converter reuses the tokenizer + recursive-descent parser from
+  `TPTPToSMT` (`parse_string!/1`) and re-emits each parsed entry as THF with
+  the rules above. Explicit `thf(NAME, type, (SYM: TYPE)).` declarations from
+  already-THF problems are preserved; otherwise types are inferred from usage.
 
   Design: runs **outside** the container, in the Elixir runner, before the
-  problem file is mounted/uploaded to Lash. This keeps the container simple
-  (no Python, no wrapper scripts).
-
-  ## Conversion rules
-
-    1. Rename `fof(`/`cnf(`/`tff(` to `thf(`
-    2. Scan for bare symbols — classify as propositions (`$o`) or
-       function/constant symbols (`$i^n→$i`) based on usage context
-    3. Generate type declarations before formulas
-    4. Annotate quantified variables with `: $i`
-    5. Update SPC header from `FOF_*`/`CNF_*` to `THF_*`
+  problem file is mounted/uploaded to Lash.
   """
 
-  @known ~w(fof cnf tff thf type axiom conjecture hypothesis and or not
-            impl equiv true false )
+  alias AtpBenchmarkRunner.TPTPToSMT
+
+  # ── Public API ────────────────────────────────────────────────────────────
 
   @doc """
   Converts a TPTP problem string to THF. Returns converted string.
   """
   @spec convert_string(binary()) :: binary()
   def convert_string(content) when is_binary(content) do
-    lines =
-      content
-      |> String.split(~r{[\r\n]+})
-      |> Enum.map(&String.trim/1)
-      |> merge_multiline_entries()
+    header = content |> String.split(~r{[\r\n]+}) |> split_header() |> elem(0)
+    entries = TPTPToSMT.parse_string!(content)
 
-    {header, body} = split_header(lines)
-    {sym, formulas} = process_formulas(body)
-    types = generate_types(sym)
+    if entries == [] do
+      # Parser could not handle this problem (e.g. exotic higher-order syntax).
+      # Fall back to a minimal rename so we never emit an empty problem.
+      legacy_fallback(content, header)
+    else
+      {sig, bvars} = TPTPToSMT.collect_signature!(entries)
+      explicit = extract_explicit_types(content)
+      types = generate_types(sig, explicit, bvars)
+      formulas = Enum.map(entries, &emit_entry(&1, bvars))
 
-    ([update_spc(header), "", types, ""] ++ formulas)
-    |> List.flatten()
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join("\n")
-    |> Kernel.<>("\n")
-  end
-
-  defp merge_multiline_entries(lines) do
-    lines
-    |> Enum.reduce([], fn line, acc ->
-      is_start =
-        String.starts_with?(line, "fof(") or String.starts_with?(line, "cnf(") or
-          String.starts_with?(line, "thf(") or String.starts_with?(line, "tff(")
-
-      cond do
-        is_start and String.ends_with?(line, ".") ->
-          [line | acc]
-
-        is_start ->
-          ["__MULTI__" <> line | acc]
-
-        true ->
-          case acc do
-            ["__MULTI__" <> buf | rest] ->
-              merged =
-                if String.ends_with?(line, "."),
-                  do: buf <> " " <> line,
-                  else: "__MULTI__" <> buf <> " " <> line
-
-              [merged | rest]
-
-            _ ->
-              [line | acc]
-          end
-      end
-    end)
-    |> Enum.reverse()
-    |> Enum.map(fn
-      "__MULTI__" <> entry -> entry
-      entry -> entry
-    end)
+      ([update_spc(header), "", types, ""] ++ formulas)
+      |> List.flatten()
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join("\n")
+      |> Kernel.<>("\n")
+    end
   end
 
   @doc """
@@ -92,8 +64,9 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
   end
 
   @doc """
-  Returns the path to a THF-converted problem for Lash, or the original
-  path if no conversion is needed.
+  Returns the path to a THF-converted problem for Lash. Always converts —
+  even already-THF problems need the Lash-safe emission (explicit `@` and
+  parenthesized equations), so the old "copy if already THF" shortcut is gone.
   """
   @spec ensure_thf(binary(), atom(), keyword()) :: binary()
   def ensure_thf(path, prover, opts \\ [])
@@ -103,14 +76,8 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
     File.mkdir_p!(out_dir)
     base = Path.basename(path, ".p")
     out = Path.join(out_dir, "#{base}_thf.p")
-
-    if needs_conversion?(path) do
-      {^out, _} = convert_file(path, output_dir: out_dir)
-      out
-    else
-      File.cp!(path, out)
-      out
-    end
+    {^out, _} = convert_file(path, output_dir: out_dir)
+    out
   end
 
   def ensure_thf(path, _prover, _opts), do: path
@@ -136,245 +103,126 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
     end)
   end
 
-  # ── Formula processing ────────────────────────────────────────────────────
+  # ── Entry / formula emission ──────────────────────────────────────────────
 
-  defp process_formulas(lines) do
-    Enum.reduce(lines, {%{}, []}, fn
-      "", {sym, out} ->
-        {sym, out ++ [""]}
+  # Lash does not accept the TPTP `negated_conjecture` role. In THF, an
+  # Unsatisfiable problem's negated-conjecture clause `¬C` must be negated and
+  # re-issued as the `conjecture` goal C (Lash refutes {axioms, ¬C}). Must be
+  # declared before the generic `role:` clause below.
+  defp emit_entry(%{name: name, role: "negated_conjecture", ast: ast}, bvars) do
+    ast = TPTPToSMT.close_free_vars!(ast)
+    "thf(#{name}, conjecture, #{emit_formula(negate(ast), bvars)})."
+  end
 
-      line, {sym, out} when is_binary(line) ->
-        trimmed = String.trim(line)
+  defp emit_entry(%{name: name, role: role, ast: ast}, bvars) do
+    # TPTP CNF/FOF clauses may reference free variables (implicitly universal).
+    ast = TPTPToSMT.close_free_vars!(ast)
+    "thf(#{name}, #{role}, #{emit_formula(ast, bvars)})."
+  end
 
-        cond do
-          String.starts_with?(trimmed, "%") ->
-            {sym, out ++ [line]}
+  defp negate({:not, f}), do: f
+  defp negate({:neq, l, r}), do: {:eq, l, r}
+  defp negate({:eq, l, r}), do: {:neq, l, r}
+  defp negate(f), do: {:not, f}
 
-          String.match?(trimmed, ~r/^thf\(/) ->
-            {sym, out ++ [line]}
+  defp emit_formula({true}, _bvars), do: "$true"
+  defp emit_formula({false}, _bvars), do: "$false"
+  defp emit_formula({:not, f}, bvars), do: "(~ #{emit_formula(f, bvars)})"
 
-          String.match?(trimmed, ~r/^(fof|cnf|tff)\(/) ->
-            {new_sym, converted} = convert_one(trimmed, sym)
-            {new_sym, out ++ [converted]}
+  defp emit_formula({:bin, op, l, r}, bvars) when op in ["&", "|", "=>", "<=>", "<~>"],
+    do: "(#{emit_formula(l, bvars)} #{op} #{emit_formula(r, bvars)})"
 
-          true ->
-            {sym, out ++ [line]}
-        end
+  defp emit_formula({:forall, vars, body}, bvars),
+    do: "![#{bindings(vars)}] : #{emit_formula(body, bvars)}"
+
+  defp emit_formula({:exists, vars, body}, bvars),
+    do: "?[#{bindings(vars)}] : #{emit_formula(body, bvars)}"
+
+  # Lash binds `=` tighter than `@`, so equations must be fully parenthesized
+  # (otherwise `identity @ X = X` is read as `identity @ (X = X)`).
+  defp emit_formula({:eq, l, r}, _bvars), do: "((#{emit_term(l)}) = (#{emit_term(r)}))"
+
+  defp emit_formula({:neq, l, r}, _bvars),
+    do: "(~ ((#{emit_term(l)}) = (#{emit_term(r)})))"
+
+  defp emit_formula({:pred, name, []}, _bvars), do: name
+
+  defp emit_formula({:pred, name, args}, _bvars),
+    do: "(#{name} @ #{Enum.map_join(args, " @ ", &emit_term/1)})"
+
+  defp bindings(vars) do
+    Enum.map_join(vars, ", ", fn {v, typ} ->
+      "#{v}: #{if typ in [nil, ""], do: "$i", else: typ}"
     end)
   end
 
-  defp convert_one(line, sym) do
-    body = String.trim_trailing(line, ".")
+  defp emit_term({:var, v}), do: v
+  defp emit_term({:const, c}), do: c
+  defp emit_term({:num, n}), do: n
+  defp emit_term({:bool, "true"}), do: "$true"
+  defp emit_term({:bool, "false"}), do: "$false"
+  defp emit_term({:func, f, []}), do: f
 
-    case Regex.run(~r/^(fof|cnf|tff)\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,\s*(.+)\)\s*$/, body) do
-      [_, _kind, name, role, formula] ->
-        formula = String.trim(formula)
-        {new_sym, thf_formula} = convert_formula(formula, sym)
-        {new_sym, "thf(#{name}, #{role}, #{thf_formula})."}
+  defp emit_term({:func, f, args}),
+    do: "(#{f} @ #{Enum.map_join(args, " @ ", &emit_term/1)})"
 
-      nil ->
-        {sym, line}
-    end
-  end
-
-  # ── Formula conversion ────────────────────────────────────────────────────
-
-  # Symbol table: %{name => %{arity: n, role: :predicate | :function | :proposition}}
-
-  defp convert_formula(formula, sym) do
-    {new_sym, _preds, _funcs} = extract_symbols(formula, sym)
-    vars = collect_vars(formula)
-
-    # Collect bare (non-applied) symbols that aren't vars
-    bare =
-      ~r/\b([a-z_][a-zA-Z0-9_]*)\b/
-      |> Regex.scan(formula)
-      |> Enum.map(fn [_, w] -> w end)
-      |> Enum.reject(&(&1 in @known))
-      |> Enum.reject(&MapSet.member?(vars, &1))
-      |> Enum.reject(&(String.length(&1) == 1 and &1 >= "A" and &1 <= "Z"))
-      |> Enum.reject(&Map.has_key?(new_sym, &1))
-
-    new_sym =
-      Enum.reduce(bare, new_sym, fn s, acc ->
-        Map.put_new(acc, s, %{arity: 0, role: :proposition})
-      end)
-
-    thf =
-      formula
-      |> String.replace(~r/\b(fof|cnf|tff)\(/, "thf(")
-      |> annotate_quants()
-
-    {new_sym, thf}
-  end
-
-  @doc false
-  # Extracts symbols with arities from a formula body.
-  # Returns {symbol_map, top-level-predicates, nested-functions}
-  def extract_symbols(formula, sym \\ %{}) do
-    result =
-      formula
-      |> extract_all_applications()
-      |> Enum.reduce(sym, fn {name, arity, depth}, acc ->
-        role = if depth == 0, do: :predicate, else: :function
-        entry = %{arity: arity, role: role}
-
-        case Map.get(acc, name) do
-          nil ->
-            Map.put(acc, name, entry)
-
-          %{arity: existing} when arity > existing ->
-            Map.put(acc, name, %{arity: arity, role: role})
-
-          %{role: :function} = _existing when role == :predicate ->
-            # Promote: if same symbol used as predicate, prefer predicate role
-            Map.put(acc, name, entry)
-
-          _ ->
-            acc
-        end
-      end)
-
-    {result, Map.keys(result) |> Enum.filter(&(Map.get(result, &1).role == :predicate)),
-     Map.keys(result) |> Enum.filter(&(Map.get(result, &1).role == :function))}
-  end
-
-  defp extract_all_applications(formula) do
-    # Find all name( matches with positions
-    name_opens =
-      ~r/\b([a-z_][a-zA-Z0-9_]*)\s*\(/
-      |> Regex.scan(formula, return: :index)
-      |> Enum.map(fn [{ms, ml}, {ns, nl}] ->
-        %{type: :open, name: String.slice(formula, ns, nl), pos: ms, match_len: ml}
-      end)
-      |> Enum.reject(fn %{name: n} -> n in @known end)
-
-    # Find all ) positions
-    close_positions =
-      formula
-      |> String.graphemes()
-      |> Enum.with_index()
-      |> Enum.filter(fn {c, _} -> c == ")" end)
-      |> Enum.map(fn {_, i} -> %{type: :close, pos: i} end)
-
-    # Merge and process in order
-    events = Enum.sort_by(name_opens ++ close_positions, & &1.pos)
-
-    {results, _stack} =
-      Enum.reduce(events, {[], []}, fn
-        %{type: :open, name: name, pos: pos, match_len: ml}, {acc, stack} ->
-          depth = length(stack)
-          # Extract args content
-          rest = String.slice(formula, (pos + ml)..-1//1)
-          args_str = extract_balanced_to_end(rest, 1)
-          arity = count_top_args(args_str)
-          {[{name, arity, depth} | acc], [pos | stack]}
-
-        %{type: :close}, {acc, [_ | stack]} ->
-          {acc, stack}
-
-        %{type: :close}, {acc, []} ->
-          {acc, []}
-      end)
-
-    results
-  end
-
-  defp extract_balanced_to_end(<<"">>, _depth), do: ""
-
-  defp extract_balanced_to_end(<<c::utf8, rest::binary>>, depth) do
-    case c do
-      c when c in ~c"([{" ->
-        inner = extract_balanced_to_end(rest, depth + 1)
-        <<c::utf8>> <> inner
-
-      c when c in ~c")]}" and depth == 1 ->
-        <<c::utf8>>
-
-      c when c in ~c")]}" ->
-        <<c::utf8>> <> extract_balanced_to_end(rest, depth - 1)
-
-      _ ->
-        <<c::utf8>> <> extract_balanced_to_end(rest, depth)
-    end
-  end
-
-  defp count_top_args(args_str) do
-    args_str = String.trim_trailing(args_str, ")") |> String.trim()
-
-    if args_str == "" do
-      0
-    else
-      args_str
-      |> String.trim()
-      |> count_commas_at_depth_0(0)
-    end
-  end
-
-  defp count_commas_at_depth_0(<<"">>, _depth), do: 1
-
-  defp count_commas_at_depth_0(<<c::utf8, rest::binary>>, depth) do
-    case c do
-      c when c in ~c"([{" -> count_commas_at_depth_0(rest, depth + 1)
-      c when c in ~c")]}" -> count_commas_at_depth_0(rest, depth - 1)
-      ?, when depth == 0 -> 1 + count_commas_at_depth_0(rest, 0)
-      _ -> count_commas_at_depth_0(rest, depth)
-    end
-  end
-
-  defp collect_vars(formula) do
-    ~r/[!?]\s*\[([^\]]+?)\]/
-    |> Regex.scan(formula)
-    |> Enum.flat_map(fn [_, vs] -> String.split(vs, ~r/[,;]/) end)
-    |> Enum.map(fn v ->
-      v |> String.trim() |> String.split(":") |> hd() |> String.trim()
-    end)
-    |> MapSet.new()
-  end
+  defp emit_term({:app, name, args}),
+    do: "(#{name} @ #{Enum.map_join(args, " @ ", &emit_term/1)})"
 
   # ── Type declarations ─────────────────────────────────────────────────────
 
-  defp generate_types(symbols) do
-    symbols
-    |> Enum.sort_by(fn {name, _} -> name end)
-    |> Enum.map(fn {name, %{arity: arity, role: role}} ->
+  # Preserve explicit `thf(NAME, type, (SYM: TYPE)).` declarations from
+  # already-THF problems (extracted by regex — the tokenizer drops the `>` of
+  # arrow types). Otherwise types are inferred from the shared parser's
+  # signature (preds → `$o`, funcs/consts → `$i`).
+  defp extract_explicit_types(content) do
+    ~r/thf\(\s*[A-Za-z0-9_]+\s*,\s*type\s*,\s*\(\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*:\s*([^)]+)\)\s*\)\s*\./
+    |> Regex.scan(content)
+    |> Enum.reduce(%{}, fn [_, sym, typ], acc -> Map.put(acc, sym, String.trim(typ)) end)
+  end
+
+  # Types are inferred from the shared parser's signature (preds → `$o`,
+  # funcs/consts → `$i`). `$o`-quantified variables (bvars) are excluded —
+  # declaring e.g. `thf(tp_P, type, (P: $o)).` while also binding `![P: $o]`
+  # is a name clash that Lash rejects.
+  defp generate_types(sig, explicit, bvars) do
+    (Map.keys(sig.preds) ++ Map.keys(sig.funcs))
+    |> Enum.uniq()
+    |> Enum.reject(&MapSet.member?(bvars, &1))
+    |> Enum.sort()
+    |> Enum.map(fn name ->
       type_str =
-        case role do
-          :proposition ->
-            "$o"
-
-          :predicate when arity == 0 ->
-            "$o"
-
-          :predicate ->
-            arrows = List.duplicate("$i", arity) |> Enum.join(" > ")
-            "#{arrows} > $o"
-
-          :function when arity == 0 ->
-            "$i"
-
-          :function ->
-            arrows = List.duplicate("$i", arity + 1) |> Enum.join(" > ")
-            arrows
+        cond do
+          Map.has_key?(explicit, name) -> explicit[name]
+          Map.has_key?(sig.preds, name) -> pred_type(Map.fetch!(sig.preds, name))
+          true -> func_type(Map.fetch!(sig.funcs, name))
         end
 
       "thf(tp_#{name}, type, (#{name}: #{type_str}))."
     end)
   end
 
-  # ── Formula transformations ───────────────────────────────────────────────
+  defp pred_type(0), do: "$o"
+  defp pred_type(arity), do: (List.duplicate("$i >", arity) |> Enum.join(" ")) <> " $o"
 
-  defp annotate_quants(formula) do
-    Regex.replace(~r/([!?])\s*\[([^\]]+?)\]\s*:/, formula, fn _, q, vars ->
-      typed =
-        String.split(vars, ~r/[,;]/)
-        |> Enum.map(fn v -> String.trim(v) end)
-        |> Enum.map(fn v ->
-          if String.contains?(v, ":"), do: v, else: "#{v}: $i"
-        end)
-        |> Enum.join(", ")
+  defp func_type(0), do: "$i"
+  defp func_type(arity), do: (List.duplicate("$i >", arity) |> Enum.join(" ")) <> " $i"
 
-      "#{q} [#{typed}] :"
-    end)
+  # ── Minimal fallback ──────────────────────────────────────────────────────
+
+  # If the parser could not handle a problem at all (e.g. exotic higher-order
+  # syntax), fall back to a bare `fof`/`cnf`/`tff` → `thf` rename rather than
+  # emitting an empty problem.
+  defp legacy_fallback(content, header) do
+    body =
+      content
+      |> String.replace(~r/\b(fof|cnf|tff)\(/, "thf(")
+      |> String.split("\n")
+      |> Enum.reject(&String.starts_with?(&1, "%"))
+
+    (update_spc(header) ++ body)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+    |> Kernel.<>("\n")
   end
 end

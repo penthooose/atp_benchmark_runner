@@ -1,15 +1,21 @@
 defmodule AtpBenchmarkRunner.Provers.Lash do
   @moduledoc """
-  Provider for Lash (THF higher-order prover).
+  Provider for Lash (TH0 higher-order prover).
 
-  Lash is a THF-only higher-order prover. FOF/CNF/TFF problems are converted
-  to THF on the host side via `TPTP.ToTHF` before the file reaches the
-  container.
+  Lash is a THF-only higher-order prover: it rejects raw FOF/CNF/TFF input,
+  so problems are converted to THF on the host side via `TPTP.ToTHF` before
+  the file reaches the container.
 
-  **Important:** Lash only supports problems at the `$o` (boolean) level.
-  It cannot handle `$i` (individual) types — FOF problems with function
-  symbols, individual constants, or first-order quantification over
-  individuals will fail with an `UnsupportedLogic` result.
+  Lash is a TH0 prover (monomorphic higher-order logic with `$i` and `$o`), so
+  FOF problems with function symbols, individual constants, and first-order
+  quantification DO work after conversion (the `ToTHF` converter emits
+  explicit `@`-application, correct `$i`/`$o` types, and parenthesized
+  equations, which is what Lash needs).
+
+  Lash is a refutation prover: it proves theorems but cannot report
+  "Satisfiable" for non-theorems (that needs `-N`, which requires a
+  `schedule_nontheorem` file that the image does not ship), so satisfiable
+  problems time out and are reported as `UnsupportedLogic`.
   """
 
   @behaviour AtpBenchmarkRunner.Provers.Provider
@@ -29,7 +35,7 @@ defmodule AtpBenchmarkRunner.Provers.Lash do
         "apptainer exec {sif_path} lash -M /opt/lash/modes -t {timeout_seconds} {problem}",
       metadata: %{
         supported_logics: [:thf, :th0],
-        logics: ["THF only — FOF/CNF/TFF problems with $i types are unsupported"],
+        logics: ["THF/TH0 (monomorphic) - FOF/CNF/TFF converted via TPTP.ToTHF"],
         integration: :cli,
         provider: __MODULE__,
         k8s_candidate?: false
@@ -49,11 +55,11 @@ defmodule AtpBenchmarkRunner.Provers.Lash do
       license: "unknown",
       notes: [
         "No Elixir binding found.",
-        "THF-only prover. FOF/CNF/TFF problems with $i types will be",
-        "skipped (UnsupportedLogic). Only problems at the $o boolean",
-        "level are supported.",
-        "FOF problems without function symbols (pure propositional)",
-        "work — they convert to $o-level THF."
+        "THF/TH0 prover. FOF/CNF/TFF input is converted to THF on the host",
+        "(explicit @-application, $i/$o types, parenthesized equations).",
+        "Refutation prover: proves theorems; satisfiable problems time out",
+        "(reported as UnsupportedLogic) because the image lacks the",
+        "`schedule_nontheorem` file required by the `-N` flag."
       ]
     })
   end

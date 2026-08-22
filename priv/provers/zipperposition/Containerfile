@@ -5,7 +5,10 @@ FROM docker.io/ocaml/opam:ubuntu-22.04-ocaml-4.12 AS builder
 RUN sudo apt-get update && sudo apt-get install -y --no-install-recommends \
     ca-certificates git libgmp-dev m4 pkg-config python3 \
     && sudo rm -rf /var/lib/apt/lists/*
-RUN opam update && opam install -y zipperposition
+# `opam update` is intentionally skipped — the image's pinned repo already
+# contains zipperposition 2.0/2.1, and a refresh pulls menhir >= 20211215 which
+# zipperposition excludes (< 20211215), breaking dependency resolution.
+RUN opam install -y zipperposition
 RUN sudo cp $(opam var bin)/zipperposition /usr/local/bin/zipperposition
 
 FROM docker.io/ubuntu:22.04

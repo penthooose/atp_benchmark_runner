@@ -72,6 +72,7 @@ defmodule AtpBenchmarkRunner do
     System.put_env("ATP_BENCHMARK_RUNNER_STORE_DIR", Path.join(tmp_root, "store"))
     System.put_env("TPTP_ROOT", Path.join(tmp_root, "tptp"))
     System.put_env("ATP_BENCHMARK_RUNNER_SMT_TMP_DIR", Path.join(tmp_root, "smt_converted"))
+    System.put_env("ATP_BENCHMARK_RUNNER_SMT_THF_DIR", Path.join(tmp_root, "thf_converted"))
     :ok
   end
 

@@ -6,7 +6,41 @@ Mix.install([
 ])
 ```
 
-## 1. Detect available execution methods
+## 1. Configure paths from `.env`
+
+```elixir
+project_root = Path.expand("..", __DIR__)
+env_file = Path.join(project_root, ".env")
+
+# Load .env values into System.put_env so Config.get() picks them up
+env_map = HpcConnect.load_env_file(env_file)
+Enum.each(env_map, fn {k, v} -> System.put_env(k, v) end)
+
+IO.puts("Configured paths:")
+IO.puts("  TPTP_ROOT:      #{AtpBenchmarkRunner.tptp_dir()}")
+IO.puts("  Store dir:      #{AtpBenchmarkRunner.store_dir()}")
+IO.puts("  SMT temp dir:   #{AtpBenchmarkRunner.Config.smt_tmp_dir()}")
+IO.puts("  THF temp dir:   #{AtpBenchmarkRunner.Config.thf_tmp_dir()}")
+IO.puts("  .env file:      #{env_file}")
+```
+
+This notebook is the local counterpart to `benchmark_hpc.livemd`. It runs the
+same prover images (via Docker instead of Apptainer) and applies the **same
+input preparation** as on the cluster:
+
+* **`:cvc5`** — problems are converted to SMT-LIB (`TPTPToSMT`) before cvc5 sees
+  them (cvc5 has no TPTP input dialect); its bare `sat`/`unsat`/`unknown` answer
+  is mapped to an SZS status.
+* **`:lash`** — FOF/CNF/TFF problems are converted to THF (`TPTP.ToTHF`) because
+  lash is a THF-`$o`-only prover.
+* All other provers read the TPTP file directly.
+
+No HPC session, SLURM, or execution plans are needed here — everything runs on
+this machine, sequentially.
+
+---
+
+## 2. Detect available execution methods
 
 ```elixir
 avail = AtpBenchmarkRunner.LocalRunner.detect_available()
@@ -32,25 +66,25 @@ end)
 ```
 
 > **Available provers:**
->
-> - **`:tableaux`** — uses the local escript (always available after `mix escript.build` in item #12)
-> - **`:eprover`** — Docker image can be built from `priv/provers/eprover/Dockerfile`
-> - **`:vampire`** — Docker image can be built from `priv/provers/vampire/Dockerfile`
-> - **`:cvc5`**, **`:zipperposition`**, **`:leo3`**, **`:leo2`**, **`:lash`** — Docker images via their Dockerfiles
->
-> Native binaries of the reference provers are not distributed for Windows. All
-> run inside containers — the same binaries used on HPC via Apptainer.
+> 
+> * **`:tableaux`** — uses the local escript (always available after `mix escript.build` in item #12)
+> * **`:eprover`**, **`:vampire`**, **`:cvc5`**, **`:zipperposition`**, **`:leo3`**, **`:leo2`**, **`:lash`** — run via Docker images built from their `Containerfile`s
+> 
+> Native binaries of the reference provers are not distributed for Windows. The
+> Docker images are built from the same sources as the HPC Apptainer `.def`s, so
+> results are directly comparable with the cluster.
 
 ---
 
-## 2. Build / pull Docker images for selected provers
+## 3. Build / pull Docker images for all provers
 
-This builds the Docker images from the bundled Dockerfiles. The first build
+This builds the Docker images from the bundled `Containerfile`s. The first build
 downloads dependencies and may take a few minutes; subsequent runs are instant.
+`:tableaux` needs no image (it runs via the local escript).
 
 ```elixir
-# Select which prover images to build
-build_provers = [:eprover, :vampire, :cvc5, :zipperposition, :leo3]
+# All containerized provers
+build_provers = [:tableaux, :eprover, :vampire, :cvc5, :zipperposition, :leo3, :leo2, :lash]
 
 IO.puts("Ensuring Docker images for: #{inspect(build_provers)}")
 IO.puts("")
@@ -93,8 +127,8 @@ results = Enum.map(build_provers, fn name ->
       result
 
     :unavailable ->
-      IO.puts("  ❌ No Dockerfile or image defined")
-      {:error, name, "no Dockerfile"}
+      IO.puts("  ❌ No Containerfile or image defined")
+      {:error, name, "no Containerfile"}
   end
 end)
 
@@ -103,89 +137,99 @@ failure = Enum.count(results, &match?({:error, _}, &1))
 IO.puts("\n#{success} built, #{failure} failed")
 
 if failure > 0 do
-  IO.puts("Failed provers: #{Enum.map_join(Enum.filter(results, &match?({:error, _, _}, &1)), ", ", fn {:error, name, _} -> name end)}")
+  failed = Enum.filter(results, &match?({:error, _, _}, &1))
+  IO.puts("Failed provers: #{Enum.map_join(failed, ", ", fn {:error, name, _} -> name end)}")
 end
 ```
 
 ---
 
-## 3. Install bundled TPTP smoke examples
+## 4. Download problems
+
+Single problems are downloaded from the TPTP distribution into `TPTP_ROOT`
+(`C:\tmp\tptp` from `.env`). `download_tptp_problems!/2` returns the resolved
+`Problem` structs plus any download warnings.
 
 ```elixir
-tptp_root =
-  AtpBenchmarkRunner.Config.tptp_dir(
-    tptp_dir: Path.expand("./tmp/benchmark_tptp", __DIR__)
-  )
+selected_problems = [
+  "ALG001+0.p",
+  "GRP001-0.p",
+  "GRP002+0.p",
+  "GRP003+0.p",
+  "GRP004+0.p",
+  "GRP720+1.p",
+  "GRP752-1.p",
+  "LAT001+0.p",
+  "PUZ001+0.p",
+  "REL001+0.p",
+  "SET001^0.p",
+  "SMT001+0.p",
+  "SYN000+0.p",
+  "THF001+0.p"
+]
 
-IO.puts("TPTP root: #{tptp_root}")
+{downloaded, download_warnings} =
+  AtpBenchmarkRunner.download_tptp_problems!(selected_problems, force: false)
 
-paths = AtpBenchmarkRunner.install_tptp_examples!(
-  root_dir: tptp_root,
-  force: true
-)
+IO.puts("Downloaded #{length(downloaded)} problem(s):")
+Enum.each(downloaded, fn problem ->
+  IO.puts("  ✅ #{problem.name}  status=#{problem.expected_status}  rating=#{problem.rating}")
+  IO.puts("     -> #{problem.path}")
+end)
 
-IO.puts("Installed #{length(paths)} example problems:")
-Enum.each(paths, &IO.puts("  - #{&1}"))
+if download_warnings == [] do
+  IO.puts("No warnings.")
+else
+  IO.puts("Warnings (#{length(download_warnings)}):")
+  Enum.each(download_warnings, fn w ->
+    IO.puts("  ⚠️  #{w.name}: #{inspect(w.reason)}")
+  end)
+end
 ```
+
+> **Tip:** `download_tptp_problems!/2` is the "single problem download" entry
+> point. Pass any TPTP problem name (e.g. `"GRP001-0.p"`); problems already
+> present under `TPTP_ROOT` are reused (set `force: true` to re-download).
 
 ---
 
-## 4. Load problems and inspect metadata
+## 5. Select provers and problems
+
+All eight provers, including our own `:tableaux` solver. Problems are selected
+by name — they resolve from `TPTP_ROOT`, the bundled examples, or a livebook
+cache automatically.
 
 ```elixir
+selected_provers = [
+  :tableaux,
+  :eprover,
+  :vampire,
+  :cvc5,
+  :zipperposition,
+  :leo3,
+  :leo2,
+  :lash
+]
+
 problems =
-  AtpBenchmarkRunner.load_tptp_problems(
-    root_dir: tptp_root,
+  AtpBenchmarkRunner.select_problems(
+    names: selected_problems,
     limit: 10
   )
 
-IO.puts("Loaded #{length(problems)} problem(s):\n")
-
-header = "| Name | Logic | Rating | Expected |"
-sep    = "|------|-------|--------|----------|"
-
-IO.puts(header)
-IO.puts(sep)
-
-Enum.each(problems, fn p ->
-  IO.puts("| #{p.name} | #{p.logic || "?"} | #{p.rating} | #{p.expected_status || "?"} |")
-end)
-```
-
----
-
-## 5. Select provers for local execution
-
-The `:tableaux` prover always runs via its escript. Provers with a Docker image
-available (b
-
-# single_node_mode: :parallel # or: sequentialuilt in step 2) are automatically detected and run via Docker.
-
-```elixir
-# provers built in step 2 will be detected and used automatically.
-# Uncomment any that have a ✅ available or were built above.
-selected_provers = [
-  # :tableaux,
-  # :eprover
-  :vampire,
-  # :cvc5,
-  # :zipperposition,
-  # :leo3,
-  # :leo2,
-  # :lash
-]
-
-IO.puts("Selected #{length(selected_provers)} prover(s):")
-Enum.each(selected_provers, fn name ->
-  IO.puts("  - #{AtpBenchmarkRunner.Prover.builtin!(name).label}")
-end)
+IO.puts("Provers (#{length(selected_provers)}): #{inspect(selected_provers)}")
+IO.puts("")
+IO.inspect(Enum.map(problems, &%{name: &1.name, path: &1.path}), label: "Problems")
 ```
 
 ---
 
 ## 6. Run the local benchmark
 
-Each prover runs against each problem **sequentially**.
+Each prover runs against each problem **sequentially**, exactly like the
+single-node sequential HPC mode. `auto_ensure_images: true` builds any missing
+Docker image on demand, and the same SMT/THF input preparation as on HPC is
+applied per prover.
 
 ```elixir
 IO.puts("Starting local benchmark...")
@@ -197,6 +241,7 @@ IO.puts("")
   :timer.tc(fn ->
     AtpBenchmarkRunner.local_benchmark(selected_provers, problems,
       timeout_seconds: 30,
+      auto_ensure_images: true,
       include_raw_output: true
     )
   end)
@@ -208,11 +253,14 @@ IO.puts("Total results: #{length(results)}")
 
 ---
 
-## 7. View raw results table
+## 7. Results table
 
 ```elixir
-IO.puts("| # | Problem | Prover | SZS Status | Wall Time (ms) | Solved? |")
-IO.puts("|---|---------|--------|------------|-----------------|---------|")
+# Guard: fall back to an empty list if this cell is evaluated before section 6.
+results = binding()[:results] || []
+
+IO.puts("| # | Problem | Prover | SZS Status | Wall (ms) | Solved? |")
+IO.puts("|---|---------|--------|------------|-----------|---------|")
 
 results
 |> Enum.with_index(1)
@@ -249,18 +297,54 @@ end)
 ### Per-problem comparison
 
 ```elixir
-IO.puts("| Problem | #{Enum.map_join(report.by_prover, " | ", & &1.prover)} |")
-IO.puts("|---------|#{Enum.map_join(report.by_prover, "-|", fn _ -> "------" end)}-|")
-
-Enum.each(report.by_problem, fn pb ->
-  cells = Enum.map(report.by_prover, fn p -> Map.get(pb.statuses, p.prover, "?") end)
-  IO.puts("| #{pb.problem_id} | #{Enum.join(cells, " | ")} |")
-end)
+AtpBenchmarkRunner.print_per_problem(report)
 ```
 
----
+### Full explained results
 
-## 9. Interesting findings
+```elixir
+IO.puts("Full explained results with proofs:\n")
+AtpBenchmarkRunner.explain_full(results) |> IO.puts()
+```
+
+### Filtered results by prover
+
+```elixir
+target_prover = :vampire
+
+IO.puts("Verbose report for prover #{target_prover}:\n")
+AtpBenchmarkRunner.verbose_report(results, prover: target_prover, solved_only: true)
+|> Enum.each(&IO.puts/1)
+```
+
+### View a specific proof
+
+```elixir
+target_prover = :vampire
+target_problem = "GRP001-0"
+
+AtpBenchmarkRunner.show_proof(results, target_prover, target_problem)
+```
+
+### Raw prover debug output
+
+```elixir
+target_prover = :vampire
+target_problem = "GRP001-0"
+
+result = Enum.find(results, fn r ->
+  r.prover == target_prover and r.problem_id == target_problem
+end)
+
+if result && result.raw_output do
+  IO.puts("Raw output for #{result.problem_id} / #{result.prover}:\n")
+  IO.puts(result.raw_output)
+else
+  IO.puts("Result not found or no raw output stored (rerun with include_raw_output: true)")
+end
+```
+
+### Interesting findings
 
 ```elixir
 interesting = report.interesting
@@ -299,7 +383,7 @@ end
 
 ---
 
-## 10. Persist results to local store
+## 9. Persist results to local store
 
 ```elixir
 run = AtpBenchmarkRunner.new_run(
@@ -320,9 +404,12 @@ report_path = AtpBenchmarkRunner.save_report!(run, report)
 IO.puts("Report saved: #{report_path}")
 ```
 
+Runs are persisted to the store directory from `.env`
+(`ATP_BENCHMARK_RUNNER_STORE_DIR`, e.g. `C:\tmp\atp_benchmark_runner_store`).
+
 ---
 
-## 11. Compare with a previous run (longitudinal diff)
+## 10. Compare with a previous run (longitudinal diff)
 
 ```elixir
 prev_results_path = nil
@@ -338,7 +425,7 @@ end
 
 ---
 
-## 12. Inspect raw output (optional)
+## 11. Inspect raw output (optional)
 
 ```elixir
 target_index = 0

@@ -17,7 +17,7 @@ defmodule AtpBenchmarkRunner.Provers.Leo2 do
       sif_name: "leo2",
       executable: "leo",
       command_template:
-        "apptainer exec {sif_path} leo -po 1 -f e -at {timeout_seconds} -t {timeout_seconds} {problem}",
+        "apptainer exec {sif_path} leo --atp e=/usr/local/bin/eprover -po 1 -f e -at {timeout_seconds} -t {timeout_seconds} {problem}",
       metadata: %{
         aliases: [:leo_ii],
         logics: ["THF", "FOF", "CNF"],

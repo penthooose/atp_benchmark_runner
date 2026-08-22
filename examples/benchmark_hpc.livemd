@@ -76,23 +76,23 @@ selected_problems = [
   "THF001+0.p"
 ]
 
-{downloaded, download_warnings} =
-	AtpBenchmarkRunner.download_tptp_problems!(selected_problems, force: false)
+# {downloaded, download_warnings} =
+# 	AtpBenchmarkRunner.download_tptp_problems!(selected_problems, force: false)
 
-IO.puts("Downloaded #{length(downloaded)} problem(s):")
-Enum.each(downloaded, fn problem ->
-	IO.puts("  ✅ #{problem.name}  status=#{problem.expected_status}  rating=#{problem.rating}")
-	IO.puts("     -> #{problem.path}")
-end)
+# IO.puts("Downloaded #{length(downloaded)} problem(s):")
+# Enum.each(downloaded, fn problem ->
+# 	IO.puts("  ✅ #{problem.name}  status=#{problem.expected_status}  rating=#{problem.rating}")
+# 	IO.puts("     -> #{problem.path}")
+# end)
 
-if download_warnings == [] do
-	IO.puts("No warnings.")
-else
-	IO.puts("Warnings (#{length(download_warnings)}):")
-	Enum.each(download_warnings, fn w ->
-		IO.puts("  ⚠️  #{w.name}: #{inspect(w.reason)}")
-	end)
-end
+# if download_warnings == [] do
+# 	IO.puts("No warnings.")
+# else
+# 	IO.puts("Warnings (#{length(download_warnings)}):")
+# 	Enum.each(download_warnings, fn w ->
+# 		IO.puts("  ⚠️  #{w.name}: #{inspect(w.reason)}")
+# 	end)
+# end
 ```
 
 ## 3. Pick provers and select problems from TPTP_ROOT

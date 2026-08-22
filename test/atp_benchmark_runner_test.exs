@@ -361,6 +361,98 @@ defmodule AtpBenchmarkRunnerTest do
     assert Result.parse_szs_status(output) == "Satisfiable"
   end
 
+  describe "TPTPToSMT" do
+    test "converts a quantified FOF problem with functions and a conjecture" do
+      smt =
+        AtpBenchmarkRunner.TPTPToSMT.convert_string!("""
+        fof(assoc, axiom, ![X, Y, Z] : (multiply(multiply(X, Y), Z) = multiply(X, multiply(Y, Z)))).
+        fof(goal, conjecture, ![X] : (multiply(X, e) = X)).
+        """)
+
+      assert smt =~ "(declare-sort U 0)"
+      assert smt =~ "(declare-fun tptp.multiply (U U) U)"
+      assert smt =~ "(declare-fun tptp.e () U)"
+      assert smt =~ "(forall ((X U) (Y U) (Z U))"
+      # a conjecture is asserted negated
+      assert smt =~ "(assert (not (forall ((X U))"
+      assert smt =~ "(check-sat)"
+    end
+
+    test "implicitly universally quantifies free variables in CNF clauses" do
+      smt =
+        AtpBenchmarkRunner.TPTPToSMT.convert_string!(
+          "cnf(f01, axiom, (mult(X1, ld(X1, X2)) = X2))."
+        )
+
+      # CNF clause variables are free in TPTP; they must be closed so SMT-LIB
+      # does not see undeclared symbols.
+      assert smt =~ "(assert (forall ((X1 U) (X2 U)) (= (tptp.mult X1 (tptp.ld X1 X2)) X2)))"
+    end
+
+    test "handles THF $o quantified variables and @ application" do
+      smt =
+        AtpBenchmarkRunner.TPTPToSMT.convert_string!("""
+        thf(axiom, axiom, ![X: $i] : (identity @ X = X)).
+        thf(goal, conjecture, ![P: $o] : ((P & P) <=> P)).
+        """)
+
+      # $i var -> U, $o var -> Bool, @ application uncurried
+      assert smt =~ "(declare-fun tptp.identity (U) U)"
+      assert smt =~ "(forall ((X U)) (= (tptp.identity X) X))"
+      assert smt =~ "(assert (not (forall ((P Bool)) (= (and P P) P))))"
+    end
+  end
+
+  describe "TPTP.ToTHF (Lash)" do
+    test "emits typed THF with explicit @-application for FOF" do
+      thf =
+        AtpBenchmarkRunner.TPTP.ToTHF.convert_string("""
+        % SPC : FOF_THM_RFO_NEQ
+        fof(left_id, axiom, ![X] : (multiply(e, X) = X)).
+        fof(goal, conjecture, ![I] : (multiply(I, e) = I)).
+        """)
+
+      # Lash needs the identity element typed $i (not $o) and multiply
+      # returning $i (not a predicate), plus explicit @-application.
+      assert thf =~ "thf(tp_e, type, (e: $i))."
+      assert thf =~ "thf(tp_multiply, type, (multiply: $i > $i > $i))."
+      assert thf =~ "![X: $i] : (((multiply @ e @ X)) = (X))"
+      assert thf =~ "% SPC : THF_THM_RFO_NEQ"
+    end
+
+    test "closes free variables in CNF clauses" do
+      thf =
+        AtpBenchmarkRunner.TPTP.ToTHF.convert_string(
+          "cnf(f01, axiom, (mult(X1, ld(X1, X2)) = X2))."
+        )
+
+      assert thf =~ "thf(tp_mult, type, (mult: $i > $i > $i))."
+      assert thf =~ "![X1: $i, X2: $i] : (((mult @ X1 @ (ld @ X1 @ X2))) = (X2))"
+    end
+
+    test "turns negated_conjecture into the conjecture (Lash has no such role)" do
+      thf =
+        AtpBenchmarkRunner.TPTP.ToTHF.convert_string(
+          "cnf(goals, negated_conjecture, mult(a, b) != mult(b, a))."
+        )
+
+      assert thf =~ "thf(tp_a, type, (a: $i))."
+      assert thf =~ "thf(tp_mult, type, (mult: $i > $i > $i))."
+      assert thf =~ "thf(goals, conjecture, (((mult @ a @ b)) = ((mult @ b @ a))))."
+      refute thf =~ "negated_conjecture"
+    end
+
+    test "does not redeclare $o-quantified variables as global types" do
+      thf =
+        AtpBenchmarkRunner.TPTP.ToTHF.convert_string(
+          "thf(goal, conjecture, ![P: $o] : ((P & P) <=> P))."
+        )
+
+      assert thf =~ "thf(goal, conjecture, ![P: $o] : ((P & P) <=> P))."
+      refute thf =~ "thf(tp_P, type"
+    end
+  end
+
   test "parses sacct output for completed job monitoring" do
     rows =
       AtpBenchmarkRunner.Monitor.parse_sacct("""
