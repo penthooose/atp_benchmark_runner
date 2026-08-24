@@ -19,6 +19,7 @@ defmodule AtpBenchmarkRunner do
     Run,
     Store,
     TPTP,
+    Visualize,
     Workflow
   }
 
@@ -675,6 +676,68 @@ defmodule AtpBenchmarkRunner do
   @spec show_proof([Result.t()], atom() | binary(), binary()) :: :ok
   def show_proof(results, prover, problem_id),
     do: Result.show_proof(results, prover, problem_id)
+
+  @doc """
+  Renders Mermaid visualizations for a result, a list of results, or a report.
+
+  Visual companion to `explain/1` and `explain_full/1`. Inside Livebook this
+  returns `Kino.Mermaid` output(s); elsewhere it returns a fenced markdown
+  string you can paste into a markdown cell.
+
+      AtpBenchmarkRunner.visualize(result)
+      AtpBenchmarkRunner.visualize(results)
+      AtpBenchmarkRunner.visualize(report)
+
+  A single result renders a prover → problem → status → timing flowchart; a
+  list renders a status pie plus a wall-time chart (pushed as two Livebook
+  outputs, returning `:ok`); a report renders a scoreboard. See
+  `AtpBenchmarkRunner.Visualize` for the raw builders.
+  """
+  @spec visualize(Result.t() | [Result.t()] | map(), keyword()) :: term()
+  def visualize(input, opts \\ [])
+
+  def visualize(%Result{} = result, opts),
+    do: Visualize.render(Visualize.result(result, opts))
+
+  def visualize(results, opts) when is_list(results) do
+    diagrams = [Visualize.status_pie(results, opts), Visualize.timeline(results, opts)]
+
+    if Visualize.available?() do
+      Enum.each(diagrams, fn diagram -> Kino.render(Visualize.render(diagram, opts)) end)
+      :ok
+    else
+      Enum.map(diagrams, &Visualize.markdown/1)
+    end
+  end
+
+  def visualize(%{totals: _} = report, opts),
+    do: Visualize.render(Visualize.report(report, opts))
+
+  @doc """
+  Renders the proof dependency graph for a result, or for the first result in
+  a list that carries a parseable proof block.
+
+      AtpBenchmarkRunner.visualize_proof(result)
+      AtpBenchmarkRunner.visualize_proof(results)
+
+  See `AtpBenchmarkRunner.Visualize.proof/2`.
+  """
+  @spec visualize_proof(Result.t() | [Result.t()], keyword()) :: term()
+  def visualize_proof(input, opts \\ [])
+
+  def visualize_proof(%Result{} = result, opts),
+    do: Visualize.render(Visualize.proof(result, opts))
+
+  def visualize_proof(results, opts) when is_list(results) do
+    result =
+      Enum.find(results, &match?({:ok, _}, AtpBenchmarkRunner.Visualize.Proof.parse(&1))) ||
+        List.first(results)
+
+    case result do
+      nil -> "No results to visualize."
+      result -> Visualize.render(Visualize.proof(result, opts))
+    end
+  end
 
   @doc """
   Prints the interesting findings section from a report to stdout.

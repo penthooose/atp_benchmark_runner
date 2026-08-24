@@ -195,6 +195,33 @@ diff = AtpBenchmarkRunner.compare_runs(prev_results, results)
 IO.puts(AtpBenchmarkRunner.diff_markdown(diff))
 ```
 
+### Visualizing results (Mermaid)
+
+`visualize/1` is the visual companion to `explain/1` and `explain_full/1`.
+Inside Livebook it returns `Kino.Mermaid` diagrams; elsewhere it returns a
+fenced markdown block you can paste into a markdown cell.
+
+```elixir
+# Single result → prover → problem → status → timing flowchart
+AtpBenchmarkRunner.visualize(result)
+
+# List → status pie + wall-time chart (pushed as two Livebook outputs)
+AtpBenchmarkRunner.visualize(results)
+
+# Report → aggregated scoreboard
+AtpBenchmarkRunner.visualize(report)
+
+# Proof → dependency DAG for E/Vampire-style TPTP clause refutations
+AtpBenchmarkRunner.visualize_proof(result)
+```
+
+Raw builders live in `AtpBenchmarkRunner.Visualize` (`result/2`, `proof/2`,
+`status_pie/2`, `timeline/2`, `report/2`); use `Visualize.markdown/1` to wrap a
+diagram in a `mermaid` code fence for copy-paste. Mermaid is used instead of
+eflambe flame graphs because the reference provers run as external OS
+processes (no BEAM to profile); the wall-time chart is the closest data-driven
+flame-graph analogue. See `AtpBenchmarkRunner.Visualize` for details.
+
 ## HPC / SLURM usage
 
 Requires a configured `hpc_connect` session.

@@ -96,6 +96,23 @@ defmodule AtpBenchmarkRunnerTest do
     assert command =~ "'/remote/TPTP/SET001^1.p'"
   end
 
+  test "tableaux command forces --no-llm so benchmarks never call OpenRouter" do
+    # The item #12 solver's hybrid orchestrator defaults `llm` to true and
+    # auto-reads OPENROUTER_API_KEY from its .env — without `--no-llm` it would
+    # call OpenRouter during benchmarks. Both the HPC template and the local
+    # invocation must pass it.
+    prover = Prover.builtin!(:tableaux)
+
+    command =
+      Prover.render_command(prover, "/remote/TPTP/GRP001-0.p",
+        timeout_seconds: 30,
+        sif_path: "/apps/tableaux.sif"
+      )
+
+    assert command =~ "--no-llm"
+    assert command =~ "--tptp-file"
+  end
+
   test "provider registry includes famous provers and aliases" do
     names = AtpBenchmarkRunner.built_in_provers() |> Enum.map(& &1.name)
 

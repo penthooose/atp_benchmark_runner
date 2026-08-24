@@ -31,9 +31,14 @@ RUN sed -i '/^module Bytes = String$/d' calculus/automation.ml && \
 RUN sed -i 's|cd ../lib/minisat;|cd ../lib/minisat; export CFLAGS="-Wall -Wno-parentheses -fPIC -fpermissive";|' Makefile && \
     sed -i 's|\$(CXX) -c -fPIC -Wall|\$(CXX) -c -fPIC -Wall -fpermissive|' Makefile
 
-RUN eval $(opam env) && make
+RUN eval $(opam env) && make && make opt
 
-RUN candidate="$(find /opt/leo2 -type f \( -name 'leo' -o -name 'leo.opt' -o -name 'leo.byte' \) | head -1)"; \
+# Prefer the NATIVE leo.opt (self-contained; the bytecode `leo` needs ocamlrun
+# + dlls at build-time paths), falling back to bytecode if make opt failed.
+RUN candidate="$(find /opt/leo2 -type f -name 'leo.opt' | head -1)"; \
+    if [ -z "$candidate" ]; then \
+    candidate="$(find /opt/leo2 -type f \( -name 'leo' -o -name 'leo.opt' -o -name 'leo.byte' \) | head -1)"; \
+    fi; \
     if [ -z "$candidate" ]; then \
     echo "LEO-II build failed" >&2; \
     exit 1; \
@@ -46,6 +51,11 @@ USER root
 COPY --from=builder /usr/local/bin/leo /usr/local/bin/leo
 # Leo bytecode links against dllminisatinterface.so at build-time paths
 COPY --from=builder /opt/leo2/src/interfaces/minisat/dllminisatinterface.so /opt/leo2/src/interfaces/minisat/dllminisatinterface.so
+# Native/bytecode leo dlopen()s OCaml C stub libraries at runtime; copy them
+# into /usr/local/lib and point CAML_LD_LIBRARY_PATH there (parity with the
+# Apptainer def fix).
+COPY --from=builder /home/opam/.opam/4.12/lib/ocaml/stublibs/dll*.so /usr/local/lib/
+ENV CAML_LD_LIBRARY_PATH=/usr/local/lib
 # LEO-II is a cooperative prover — needs E-Prover as first-order backend.
 # LEO-II 1.7.0 calls E with `-t <seconds>` (E <= 1.9 CPU-time flag); E 2.x
 # redefined `-t` as --term-ordering, so the latest E fails with "Option -t

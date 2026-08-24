@@ -620,6 +620,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
         |> String.replace("{timeout_seconds}", to_string(timeout_seconds))
         |> String.replace("{timeout_ms}", to_string(timeout_seconds * 1_000))
         |> String.replace("{sif_path}", "/dev/null")
+        |> String.replace("{cores}", "1")
       end)
 
     docker_args =
@@ -691,7 +692,9 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
     cond do
       File.exists?(escript) and detect_escript_available() ->
-        {"escript", [escript, "--tptp-file", problem_path, "--symbolic-only"], []}
+        # `--no-llm` forces symbolic-only: the solver defaults `llm` to true and
+        # would call OpenRouter (auto-reading the item #12 .env API key).
+        {"escript", [escript, "--no-llm", "--tptp-file", problem_path], []}
 
       File.exists?(Path.join(solver_root, "mix.exs")) ->
         {"mix",
@@ -700,9 +703,9 @@ defmodule AtpBenchmarkRunner.LocalRunner do
            "--no-start",
            Path.join(solver_root, "run.exs"),
            "--",
+           "--no-llm",
            "--tptp-file",
-           problem_path,
-           "--symbolic-only"
+           problem_path
          ], [cd: solver_root]}
 
       true ->
@@ -812,11 +815,13 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   Filters problems to only those whose logic is supported by the prover.
 
   For Lash specifically, this uses content-based scanning:
-  - THF/TH0: always compatible (already $o-level)
-  - FOF/CNF/TFF without function symbols: compatible (propositional,
-    converter turns them into $o-level THF)
-  - FOF/CNF/TFF with function symbols: incompatible (lash cannot
-    handle $i typed terms)
+  - THF/TH0: always compatible
+  - FOF/CNF/TFF: compatible — the `TPTP.ToTHF` converter emits Lash-safe TH0
+    (explicit `@`, `$i`/`$o` types, parenthesized equations), so function
+    symbols / `$i` terms are fine.
+  - Only problems with no conjecture that are Satisfiable are skipped: Lash is
+    a refutation prover and cannot determine plain Satisfiable (needs the
+    `-N`/`schedule_nontheorem` machinery not present in the image).
 
   For other provers, falls back to `:supported_logics` metadata if set.
   """
@@ -853,9 +858,6 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     cond do
       prefix in ~w(thf th0) ->
         true
-
-      has_function_symbols?(path) ->
-        false
 
       not has_conjecture?(path) and expected == "Satisfiable" ->
         # Lash is a refutation prover — without a conjecture it can only

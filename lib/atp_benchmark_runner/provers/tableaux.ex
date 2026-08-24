@@ -20,14 +20,19 @@ defmodule AtpBenchmarkRunner.Provers.Tableaux do
       # `--tptp-file <path>` — there is no `solve` subcommand nor `--timeout`
       # flag. The wall-time bound is applied by the runner's `timeout` wrapper,
       # so no per-prover timeout flag is needed here.
-      command_template: "apptainer exec {sif_path} simple_tableaux_solver --tptp-file {problem}",
+      #
+      # `--no-llm` is REQUIRED: the solver's hybrid orchestrator defaults
+      # `llm` to true and would otherwise call OpenRouter during benchmarks
+      # (it auto-reads OPENROUTER_API_KEY from the item #12 `.env`).
+      command_template:
+        "apptainer exec {sif_path} simple_tableaux_solver --no-llm --tptp-file {problem}",
       metadata: %{
         project: "item #12",
         integration: :cli,
         provider: __MODULE__,
         k8s_candidate?: true,
         notes:
-          "CLI: `--tptp-file <path>` (symbolic/hybrid route decided by the solver heuristic)."
+          "CLI: `--tptp-file <path>` with `--no-llm` (always symbolic-only — no OpenRouter calls)."
       }
     })
   end

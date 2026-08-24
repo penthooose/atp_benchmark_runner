@@ -105,7 +105,8 @@ defmodule AtpBenchmarkRunner.Prover do
       "{timeout_seconds}" => to_string(Keyword.get(opts, :timeout_seconds, 300)),
       "{timeout_ms}" => to_string(Keyword.get(opts, :timeout_seconds, 300) * 1_000),
       "{result_file}" => Shell.quote(Keyword.get(opts, :result_file, "result.out")),
-      "{sif_path}" => Shell.quote(Keyword.get(opts, :sif_path) || prover.sif_path || "")
+      "{sif_path}" => Shell.quote(Keyword.get(opts, :sif_path) || prover.sif_path || ""),
+      "{cores}" => "1"
     }
 
     replace_placeholders(prover.command_template, replacements)
