@@ -3,6 +3,9 @@ defmodule AtpBenchmarkRunner.Result do
   Parsed result of running one prover on one benchmark problem.
   """
 
+  alias AtpBenchmarkRunner.Prover
+  alias AtpBenchmarkRunner.Provers
+
   @solved_statuses MapSet.new(~w(
     Theorem Unsatisfiable Satisfiable CounterSatisfiable ContradictoryAxioms
     CounterTheorem Equivalent NotEquivalent
@@ -66,17 +69,55 @@ defmodule AtpBenchmarkRunner.Result do
 
   @doc """
   Parses a prover stdout/stderr blob into a result.
+
+  The prover may be given as a `Prover` struct (preferred), or as a name; the
+  declared `parser` (from the prover spec) drives status extraction, so provers
+  that emit bare `sat`/`unsat`/`unknown` answers (e.g. cvc5 in SMT-LIB mode)
+  are handled without special-casing. An explicit `:parser` opt overrides.
   """
-  @spec from_output(binary() | atom(), binary(), binary(), keyword()) :: t()
+  @spec from_output(Prover.t() | binary() | atom(), binary(), binary(), keyword()) :: t()
   def from_output(prover, problem_id, output, attrs \\ []) do
+    parser = Keyword.get(attrs, :parser, parser_for(prover))
+
     attrs
-    |> Keyword.put(:prover, prover)
+    |> Keyword.put(:prover, prover_name(prover))
     |> Keyword.put(:problem_id, problem_id)
-    |> Keyword.put_new(:szs_status, parse_szs_status(output))
+    |> Keyword.put_new(:szs_status, parse_for(parser, output))
     |> Keyword.put_new(:raw_output, output)
     |> refine_timeout_to_gaveup()
     |> add_unsupported_reason()
     |> new()
+  end
+
+  defp prover_name(%Prover{name: name}), do: name
+  defp prover_name(other), do: other
+
+  defp parser_for(%Prover{parser: parser}), do: parser
+  defp parser_for(name), do: Provers.parser_for(name)
+
+  @doc """
+  Extracts an SZS status from output using a prover's declared parser.
+
+    * `:szs` — standard SZS status extraction (default)
+    * `:smt_bare` — bare SMT-LIB `sat`/`unsat`/`unknown` answer, falling back
+      to SZS extraction (cvc5 in SMT-LIB mode)
+    * `{:custom, Mod}` — `Mod.parse/1`, falling back to SZS extraction
+  """
+  @spec parse_for(atom() | tuple(), binary()) :: binary() | nil
+  def parse_for(parser, output) when is_binary(output) do
+    case parser do
+      :szs ->
+        parse_szs_status(output)
+
+      :smt_bare ->
+        plain_answer(output) || parse_szs_status(output)
+
+      {:custom, mod} when is_atom(mod) ->
+        mod.parse(output) || parse_szs_status(output)
+
+      _ ->
+        parse_szs_status(output)
+    end
   end
 
   # Add a metadata reason when the status is UnsupportedLogic, so the

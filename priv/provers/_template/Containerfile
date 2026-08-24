@@ -1,0 +1,27 @@
+# Containerfile template for a TPTP-native ATP prover (local Docker builds).
+# Modeled on priv/provers/vampire/Containerfile — the simplest pattern: pull an
+# upstream release binary. See docs/ADDING_A_PROVER.md.
+#
+#   docker build -t docker.io/aise/atp-<name>:latest priv/provers/<name>/
+#   docker run --rm docker.io/aise/atp-<name>:latest --tstp-out /problems/problem.p
+
+FROM docker.io/ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Fetch/build the prover here. Prefer an upstream release binary (curl a
+# tarball/zip and install it); otherwise build from source — mirror the
+# %post steps in apptainer.def so both images stay in sync.
+RUN set -eux; \
+    curl -fsSL "<SOURCE_URL>" -o /tmp/prover.bin; \
+    install -m 0755 /tmp/prover.bin /usr/local/bin/<prover>; \
+    <prover> --version
+
+FROM docker.io/ubuntu:24.04
+# Runtime libraries the prover needs (e.g. libomp for Vampire, libgmp for
+# OCaml-built provers). Uncomment and adjust:
+# RUN apt-get update && apt-get install -y --no-install-recommends <libs> && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/bin/<prover> /usr/local/bin/<prover>
+ENTRYPOINT ["<prover>"]

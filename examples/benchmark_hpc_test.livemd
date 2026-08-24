@@ -9,12 +9,10 @@ Mix.install([
 ## 1. Configure paths from `.env`
 
 ```elixir
-project_root = Path.expand("..", __DIR__)
-env_file = Path.join(project_root, ".env")
+env_file = Path.expand("../.env", __DIR__)
 
-# Load .env values into System.put_env so Config.get() picks them up
-env_map = HpcConnect.load_env_file(env_file)
-Enum.each(env_map, fn {k, v} -> System.put_env(k, v) end)
+# Load .env values into the OS environment (Config.get() and hpc_connect pick them up).
+env_map = AtpBenchmarkRunner.load_env!(env_file)
 
 IO.puts("Configured paths:")
 IO.puts("  TPTP_ROOT:      #{AtpBenchmarkRunner.tptp_dir()}")
@@ -118,21 +116,16 @@ IO.inspect(image_plan, label: "Remote image build plan", limit: :infinity)
 ```elixir
 prepare_images_now? = false
 
+# One call: uploads each prover's apptainer.def and builds the remote .sif.
+# force: true rebuilds even existing .sif images
+# (apptainer build --force --ignore-fakeroot-command).
 if prepare_images_now? do
-	uploaded_defs =
-		AtpBenchmarkRunner.upload_prover_definitions!(
-			session,
-			prover_structs,
-			install_scripts: false
-		)
-
-	IO.inspect(uploaded_defs, label: "Uploaded ATP prover defs")
-
 	built_images =
 		AtpBenchmarkRunner.build_prover_images!(
 			session,
 			prover_structs,
-			install_scripts: false
+			install_scripts: false,
+			force: false
 		)
 
 	IO.inspect(built_images, label: "Built ATP prover images")
@@ -301,12 +294,8 @@ run = AtpBenchmarkRunner.new_run(
 	problem_timeout_seconds: 30
 )
 
-run_path = AtpBenchmarkRunner.save_run!(run)
-IO.puts("Run saved: #{run_path}")
-
-results_path = AtpBenchmarkRunner.save_results!(run, results)
-IO.puts("Results saved: #{results_path}")
-
-report_path = AtpBenchmarkRunner.save_report!(run, report)
-IO.puts("Report saved: #{report_path}")
+paths = AtpBenchmarkRunner.persist_run!(run, results, report)
+IO.puts("Run saved: #{paths.run_path}")
+IO.puts("Results saved: #{paths.results_path}")
+IO.puts("Report saved: #{paths.report_path}")
 ```

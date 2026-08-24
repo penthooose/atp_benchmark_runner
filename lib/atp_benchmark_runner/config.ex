@@ -16,6 +16,7 @@ defmodule AtpBenchmarkRunner.Config do
   @bundled_examples_dir_var "ATP_BENCHMARK_RUNNER_BUNDLED_EXAMPLES_DIR"
   @user_examples_dir_var "ATP_BENCHMARK_RUNNER_USER_EXAMPLES_DIR"
   @single_download_dir_var "ATP_BENCHMARK_RUNNER_SINGLE_DOWNLOAD_DIR"
+  @sif_dir_var "ATP_BENCHMARK_RUNNER_SIF_DIR"
 
   @doc """
   Loads configuration values from the configured `.env` file.
@@ -93,6 +94,22 @@ defmodule AtpBenchmarkRunner.Config do
     |> option_value([:thf_tmp_dir])
     |> first_present(get(@thf_tmp_dir_var, opts))
     |> first_present(Path.expand("./tmp/thf_converted"))
+    |> expand_path()
+  end
+
+  @doc """
+  Returns the directory where locally-built Apptainer `.sif` images are stored
+  (used by `LocalRunner` when the `:apptainer` build backend is selected).
+
+  Configure via `ATP_BENCHMARK_RUNNER_SIF_DIR` env var or the `:sif_dir` option.
+  Falls back to `./tmp/singularity_images`.
+  """
+  @spec sif_dir(keyword()) :: binary()
+  def sif_dir(opts \\ []) do
+    opts
+    |> option_value([:sif_dir])
+    |> first_present(get(@sif_dir_var, opts))
+    |> first_present(Path.expand("./tmp/singularity_images"))
     |> expand_path()
   end
 

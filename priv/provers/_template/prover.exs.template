@@ -1,0 +1,39 @@
+# ── ATP prover spec template ─────────────────────────────────────────────────
+# Copy this directory to `priv/provers/<name>/` and rename this file to
+# `prover.exs`. Only the keys below are allowed — unknown keys are rejected on
+# load (see AtpBenchmarkRunner.Prover.Spec). Complete reference: Vampire
+# (`priv/provers/vampire/prover.exs`), full guide: docs/ADDING_A_PROVER.md.
+#
+# Current scope: TPTP-native provers (read `.p`, emit `% SZS status`).
+%{
+  name: :<name>,          # required — canonical atom used everywhere
+  label: "<Display Name>", # shown in the GUI dropdown and reports
+  aliases: ["<alias>"],    # optional alternate lookup names
+
+  # Optional: only set when the SIF/image name differs from the atom name
+  # (see tableaux: `simple_tableaux_solver`).
+  # sif_name: "<sif-name>",
+
+  # required — how the prover is invoked inside the container. Placeholders:
+  #   {problem} {timeout_seconds} {timeout_ms} {sif_path} {result_file} {cores}
+  command_template:
+    "apptainer exec {sif_path} <prover> --timeout {timeout_seconds} {problem}",
+
+  # Behavior hooks — only set when non-default:
+  #   input:    :tptp (default) | :smt2 | :thf | {:custom, Mod}
+  #   parser:   :szs   (default) | :smt_bare | {:custom, Mod}
+  #   supports: %{forms: [:fof, ...], requires_conjecture?: true}
+  # input: :smt2
+
+  container: %{
+    # required — HPC Apptainer definition path (uploaded + built to a .sif)
+    def_path: "priv/provers/<name>/apptainer.def",
+    # required for local Docker — image tag and build context
+    docker_image: "docker.io/aise/atp-<name>:latest",
+    dockerfile_path: "priv/provers/<name>/Containerfile"
+  }
+
+  # Optional — `logics` is used by the HPC image smoke test to pick a
+  # compatible example problem.
+  # metadata: %{logics: ["FOF", "TFF"]}
+}

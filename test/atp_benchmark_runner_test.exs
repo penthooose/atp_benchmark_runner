@@ -38,7 +38,7 @@ defmodule AtpBenchmarkRunnerTest do
 
     assert archive.version == "9.2.1"
     assert archive.archive_name == "TPTP-v9.2.1.tgz"
-    assert archive.url == "https://tptp.org/TPTP/TPTP-v9.2.1.tgz"
+    assert archive.url == "https://tptp.org/TPTP/Distribution/TPTP-v9.2.1.tgz"
   end
 
   test "installs bundled examples and loads filtered problem sets" do
@@ -46,7 +46,7 @@ defmodule AtpBenchmarkRunnerTest do
 
     installed = AtpBenchmarkRunner.install_tptp_examples!(root_dir: tmp)
 
-    assert length(installed) == 12
+    assert length(installed) == 14
 
     problems =
       AtpBenchmarkRunner.load_tptp_problems(
@@ -78,8 +78,8 @@ defmodule AtpBenchmarkRunnerTest do
         "limit" => 5
       })
 
-    assert selection.summary.count == 1
-    assert [%Problem{name: "GRP001-0"}] = selection.problems
+    assert selection.summary.count == 2
+    assert Enum.map(selection.problems, & &1.name) |> Enum.sort() == ["GRP001-0", "GRP752-1"]
   end
 
   test "built-in provers render shell-safe command templates" do
@@ -187,7 +187,7 @@ defmodule AtpBenchmarkRunnerTest do
     assert [%{image: img, args: [arg]}] =
              manifest.spec.template.spec.containers
 
-    assert img == "aise/atp-cvc5:latest"
+    assert img == "docker.io/aise/atp-cvc5:latest"
 
     assert arg =~ "timeout --preserve-status 15s cvc5"
     assert arg =~ "'/problems/demo.p'"
@@ -211,7 +211,8 @@ defmodule AtpBenchmarkRunnerTest do
     assert script =~ "timeout --preserve-status"
     assert script =~ "SZS status Timeout"
     assert script =~ "PROBLEM_ID=\"${PROBLEM_BASENAME%.*}\""
-    assert script =~ "RESOURCE_FILE=\"$RESULT_DIR/${PROBLEM_ID}.resources.txt\""
+    # Memory tracking is done via the ps-monitoring loop (no separate resource file).
+    assert script =~ "PEAK_RSS_KB"
     assert script =~ "memory_kb"
   end
 

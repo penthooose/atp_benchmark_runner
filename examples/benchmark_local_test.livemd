@@ -9,12 +9,10 @@ Mix.install([
 ## 1. Configure paths from `.env`
 
 ```elixir
-project_root = Path.expand("..", __DIR__)
-env_file = Path.join(project_root, ".env")
+env_file = Path.expand("../.env", __DIR__)
 
-# Load .env values into System.put_env so Config.get() picks them up
-env_map = HpcConnect.load_env_file(env_file)
-Enum.each(env_map, fn {k, v} -> System.put_env(k, v) end)
+# Load .env values into the OS environment (Config.get() and hpc_connect pick them up).
+env_map = AtpBenchmarkRunner.load_env!(env_file)
 
 IO.puts("Configured paths:")
 IO.puts("  TPTP_ROOT:      #{AtpBenchmarkRunner.tptp_dir()}")
@@ -43,26 +41,7 @@ this machine, sequentially.
 ## 2. Detect available execution methods
 
 ```elixir
-avail = AtpBenchmarkRunner.LocalRunner.detect_available()
-
-IO.puts("""
-Detection results:
-  tableaux: #{avail.tableaux}
-  escript:  #{avail.escript}
-  docker:   #{avail.docker}
-  on PATH:  #{inspect(avail.on_path)}
-""")
-
-IO.puts("Docker image status:")
-Enum.each(avail.docker_images, fn {prover, status} ->
-  icon = case status do
-    :available -> "✅"
-    :needs_build -> "🏗️"
-    :needs_pull -> "📥"
-    :unavailable -> "❌"
-  end
-  IO.puts("  #{icon} #{prover}: #{status}")
-end)
+IO.puts(AtpBenchmarkRunner.LocalRunner.image_status_summary())
 ```
 
 > **Available provers:**
@@ -78,68 +57,16 @@ end)
 
 ## 3. Build / pull Docker images for all provers
 
-This builds the Docker images from the bundled `Containerfile`s. The first build
-downloads dependencies and may take a few minutes; subsequent runs are instant.
-`:tableaux` needs no image (it runs via the local escript).
+This builds images for all registered provers from their `Containerfile`s
+(Docker) or `apptainer.def`s (Apptainer). The first build downloads
+dependencies and may take a few minutes; subsequent runs are instant.
+`force: true` rebuilds everything. Returns `{:ok, name}` / `{:error, name, reason}`
+per prover.
 
 ```elixir
-# All containerized provers
-build_provers = [:tableaux, :eprover, :vampire, :cvc5, :zipperposition, :leo3, :leo2, :lash]
-
-IO.puts("Ensuring Docker images for: #{inspect(build_provers)}")
-IO.puts("")
-
-results = Enum.map(build_provers, fn name ->
-  status = AtpBenchmarkRunner.LocalRunner.docker_image_status(name)
-  IO.puts("#{name}: #{status}")
-
-  case status do
-    :available ->
-      IO.puts("  ✅ Image already available")
-      {:ok, name}
-
-    :needs_build ->
-      IO.puts("  🏗️ Building Docker image...")
-      result = try do
-        AtpBenchmarkRunner.LocalRunner.ensure_docker_image!(name)
-        {:ok, name}
-      rescue
-        e -> {:error, name, Exception.message(e)}
-      end
-      case result do
-        {:ok, _} -> IO.puts("  ✅ Done")
-        {:error, _, msg} -> IO.puts("  ❌ Failed: #{String.slice(msg, 0, 200)}")
-      end
-      result
-
-    :needs_pull ->
-      IO.puts("  📥 Pulling from registry...")
-      result = try do
-        AtpBenchmarkRunner.LocalRunner.ensure_docker_image!(name)
-        {:ok, name}
-      rescue
-        e -> {:error, name, Exception.message(e)}
-      end
-      case result do
-        {:ok, _} -> IO.puts("  ✅ Done")
-        {:error, _, msg} -> IO.puts("  ❌ Failed: #{String.slice(msg, 0, 200)}")
-      end
-      result
-
-    :unavailable ->
-      IO.puts("  ❌ No Containerfile or image defined")
-      {:error, name, "no Containerfile"}
-  end
-end)
-
-success = Enum.count(results, &match?({:ok, _}, &1))
-failure = Enum.count(results, &match?({:error, _}, &1))
-IO.puts("\n#{success} built, #{failure} failed")
-
-if failure > 0 do
-  failed = Enum.filter(results, &match?({:error, _, _}, &1))
-  IO.puts("Failed provers: #{Enum.map_join(failed, ", ", fn {:error, name, _} -> name end)}")
-end
+# Build (or pull) local images for all registered provers in one call.
+# backend: :auto (default) | :docker | :apptainer   ·   force: true rebuilds all.
+results = AtpBenchmarkRunner.build_local_images!(:all, backend: :docker)
 ```
 
 ---
@@ -531,14 +458,10 @@ run = AtpBenchmarkRunner.new_run(
   problem_timeout_seconds: 30
 )
 
-run_path = AtpBenchmarkRunner.save_run!(run)
-IO.puts("Run saved: #{run_path}")
-
-results_path = AtpBenchmarkRunner.save_results!(run, results)
-IO.puts("Results saved: #{results_path}")
-
-report_path = AtpBenchmarkRunner.save_report!(run, report)
-IO.puts("Report saved: #{report_path}")
+paths = AtpBenchmarkRunner.persist_run!(run, results, report)
+IO.puts("Run saved: #{paths.run_path}")
+IO.puts("Results saved: #{paths.results_path}")
+IO.puts("Report saved: #{paths.report_path}")
 ```
 
 Runs are persisted to the store directory from `.env`

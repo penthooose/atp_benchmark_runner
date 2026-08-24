@@ -9,31 +9,26 @@ Mix.install([
 ## 1. Configure paths from `.env`
 
 ```elixir
-project_root = Path.expand("..", __DIR__)
-env_file = Path.join(project_root, ".env")
-
-# Load .env values into System.put_env so Config.get() picks them up
-env_map = HpcConnect.load_env_file(env_file)
-Enum.each(env_map, fn {k, v} -> System.put_env(k, v) end)
+# Load .env values into the OS environment (Config.get() and hpc_connect pick them up).
+env_map = AtpBenchmarkRunner.load_env!(Path.expand("../.env", __DIR__))
 
 IO.puts("Configured paths:")
 IO.puts("  TPTP_ROOT:      #{AtpBenchmarkRunner.tptp_dir()}")
 IO.puts("  Store dir:      #{AtpBenchmarkRunner.store_dir()}")
 IO.puts("  SMT temp dir:   #{AtpBenchmarkRunner.Config.smt_tmp_dir()}")
 IO.puts("  THF temp dir:   #{AtpBenchmarkRunner.Config.thf_tmp_dir()}")
-IO.puts("  .env file:      #{env_file}")
 ```
 
 This notebook is the local counterpart to `benchmark_hpc.livemd`. It runs the
 same prover images (via Docker instead of Apptainer) and applies the **same
 input preparation** as on the cluster:
 
-* **`:cvc5`** — problems are converted to SMT-LIB (`TPTPToSMT`) before cvc5 sees
+- **`:cvc5`** — problems are converted to SMT-LIB (`TPTPToSMT`) before cvc5 sees
   them (cvc5 has no TPTP input dialect); its bare `sat`/`unsat`/`unknown` answer
   is mapped to an SZS status.
-* **`:lash`** — FOF/CNF/TFF problems are converted to THF (`TPTP.ToTHF`) because
+- **`:lash`** — FOF/CNF/TFF problems are converted to THF (`TPTP.ToTHF`) because
   lash is a THF-`$o`-only prover.
-* All other provers read the TPTP file directly.
+- All other provers read the TPTP file directly.
 
 No HPC session, SLURM, or execution plans are needed here — everything runs on
 this machine, sequentially.
@@ -43,33 +38,14 @@ this machine, sequentially.
 ## 2. Detect available execution methods
 
 ```elixir
-avail = AtpBenchmarkRunner.LocalRunner.detect_available()
-
-IO.puts("""
-Detection results:
-  tableaux: #{avail.tableaux}
-  escript:  #{avail.escript}
-  docker:   #{avail.docker}
-  on PATH:  #{inspect(avail.on_path)}
-""")
-
-IO.puts("Docker image status:")
-Enum.each(avail.docker_images, fn {prover, status} ->
-  icon = case status do
-    :available -> "✅"
-    :needs_build -> "🏗️"
-    :needs_pull -> "📥"
-    :unavailable -> "❌"
-  end
-  IO.puts("  #{icon} #{prover}: #{status}")
-end)
+IO.puts(AtpBenchmarkRunner.LocalRunner.image_status_summary())
 ```
 
 > **Available provers:**
-> 
-> * **`:tableaux`** — uses the local escript (always available after `mix escript.build` in item #12)
-> * **`:eprover`**, **`:vampire`**, **`:cvc5`**, **`:zipperposition`**, **`:leo3`**, **`:leo2`**, **`:lash`** — run via Docker images built from their `Containerfile`s
-> 
+>
+> - **`:tableaux`** — uses the local escript (always available after `mix escript.build` in item #12)
+> - **`:eprover`**, **`:vampire`**, **`:cvc5`**, **`:zipperposition`**, **`:leo3`**, **`:leo2`**, **`:lash`** — run via Docker images built from their `Containerfile`s
+>
 > Native binaries of the reference provers are not distributed for Windows. The
 > Docker images are built from the same sources as the HPC Apptainer `.def`s, so
 > results are directly comparable with the cluster.
@@ -78,68 +54,16 @@ end)
 
 ## 3. Build / pull Docker images for all provers
 
-This builds the Docker images from the bundled `Containerfile`s. The first build
-downloads dependencies and may take a few minutes; subsequent runs are instant.
-`:tableaux` needs no image (it runs via the local escript).
+This builds images for all registered provers from their `Containerfile`s
+(Docker) or `apptainer.def`s (Apptainer). The first build downloads
+dependencies and may take a few minutes; subsequent runs are instant.
+`force: true` rebuilds everything. Returns `{:ok, name}` / `{:error, name, reason}`
+per prover.
 
 ```elixir
-# All containerized provers
-build_provers = [:tableaux, :eprover, :vampire, :cvc5, :zipperposition, :leo3, :leo2, :lash]
-
-IO.puts("Ensuring Docker images for: #{inspect(build_provers)}")
-IO.puts("")
-
-results = Enum.map(build_provers, fn name ->
-  status = AtpBenchmarkRunner.LocalRunner.docker_image_status(name)
-  IO.puts("#{name}: #{status}")
-
-  case status do
-    :available ->
-      IO.puts("  ✅ Image already available")
-      {:ok, name}
-
-    :needs_build ->
-      IO.puts("  🏗️ Building Docker image...")
-      result = try do
-        AtpBenchmarkRunner.LocalRunner.ensure_docker_image!(name)
-        {:ok, name}
-      rescue
-        e -> {:error, name, Exception.message(e)}
-      end
-      case result do
-        {:ok, _} -> IO.puts("  ✅ Done")
-        {:error, _, msg} -> IO.puts("  ❌ Failed: #{String.slice(msg, 0, 200)}")
-      end
-      result
-
-    :needs_pull ->
-      IO.puts("  📥 Pulling from registry...")
-      result = try do
-        AtpBenchmarkRunner.LocalRunner.ensure_docker_image!(name)
-        {:ok, name}
-      rescue
-        e -> {:error, name, Exception.message(e)}
-      end
-      case result do
-        {:ok, _} -> IO.puts("  ✅ Done")
-        {:error, _, msg} -> IO.puts("  ❌ Failed: #{String.slice(msg, 0, 200)}")
-      end
-      result
-
-    :unavailable ->
-      IO.puts("  ❌ No Containerfile or image defined")
-      {:error, name, "no Containerfile"}
-  end
-end)
-
-success = Enum.count(results, &match?({:ok, _}, &1))
-failure = Enum.count(results, &match?({:error, _}, &1))
-IO.puts("\n#{success} built, #{failure} failed")
-
-if failure > 0 do
-  failed = Enum.filter(results, &match?({:error, _, _}, &1))
-  IO.puts("Failed provers: #{Enum.map_join(failed, ", ", fn {:error, name, _} -> name end)}")
-end
+# Build (or pull) local images for all registered provers in one call.
+# backend: :auto (default) | :docker | :apptainer   ·   force: true rebuilds all.
+results = AtpBenchmarkRunner.build_local_images!(:all, backend: :docker)
 ```
 
 ---
@@ -383,7 +307,144 @@ end
 
 ---
 
-## 9. Persist results to local store
+## 9. Visualizations
+
+Mermaid-based visual companions to `explain/1` / `explain_full/1`. Each cell
+returns a `Kino.Mermaid` diagram (or a fenced markdown block outside
+Livebook). If the real run has not produced results yet — or the kernel was
+restarted — the cells fall back to synthetic sample results so you can see the
+look of every diagram without needing the Docker images.
+
+### Synthetic sample results (fallback when section 6 has not run)
+
+```elixir
+defmodule VisualizeSample do
+  def results do
+    refutation = """
+    % SZS output start CNFRefutation
+    fof(unit_not_a, axiom, ~(a), file('GRP001-0.p', unit_not_a)).
+    fof(unit_a, axiom, a, file('GRP001-0.p', unit_a)).
+    fof(c_0_2, plain, ~a, inference(fof_simplification,[status(thm)],[unit_not_a])).
+    cnf(c_0_4, plain, (~a), inference(split_conjunct,[status(thm)],[c_0_2])).
+    cnf(c_0_5, plain, (a), inference(split_conjunct,[status(thm)],[unit_a])).
+    cnf(c_0_6, plain, ($false), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_4, c_0_5])]), ['proof']).
+    % SZS output end CNFRefutation
+    """
+
+    [
+      AtpBenchmarkRunner.Result.new(
+        problem_id: "GRP001-0",
+        prover: :eprover,
+        szs_status: "Theorem",
+        wall_time_ms: 812,
+        memory_kb: 12_345,
+        raw_output: refutation
+      ),
+      AtpBenchmarkRunner.Result.new(
+        problem_id: "GRP002+0",
+        prover: :eprover,
+        szs_status: "GaveUp",
+        wall_time_ms: 30_000,
+        memory_kb: 8_100
+      ),
+      AtpBenchmarkRunner.Result.new(
+        problem_id: "GRP001-0",
+        prover: :vampire,
+        szs_status: "Theorem",
+        wall_time_ms: 402,
+        memory_kb: 9_900
+      ),
+      AtpBenchmarkRunner.Result.new(
+        problem_id: "SMT001+0",
+        prover: :cvc5,
+        szs_status: "Satisfiable",
+        wall_time_ms: 604,
+        memory_kb: 4_200
+      )
+    ]
+  end
+end
+```
+
+### 9a. Single result — `AtpBenchmarkRunner.visualize(result)`
+
+```elixir
+results = binding()[:results] || []
+results = if results == [], do: VisualizeSample.results(), else: results
+
+target =
+  Enum.find(results, fn r ->
+    r.prover == :eprover and AtpBenchmarkRunner.Result.solved?(r)
+  end)
+
+if target, do: AtpBenchmarkRunner.visualize(target), else: "No solved eprover result found."
+```
+
+### 9b. Proof dependency graph — `AtpBenchmarkRunner.visualize_proof(result)`
+
+For provers that emit machine-readable TPTP clause refutations (E, Vampire)
+this renders the proof as a dependency DAG. Other provers fall back to a
+pipeline diagram.
+
+```elixir
+results = binding()[:results] || []
+results = if results == [], do: VisualizeSample.results(), else: results
+
+target =
+  Enum.find(results, fn r ->
+    match?({:ok, _}, AtpBenchmarkRunner.Visualize.Proof.parse(r))
+  end)
+
+if target, do: AtpBenchmarkRunner.visualize_proof(target), else: "No parseable proof found."
+```
+
+### 9c. Run summary — status pie + wall-time chart
+
+`AtpBenchmarkRunner.visualize(results)` is the one-call shortcut for
+`Visualize.status_pie/2` + `Visualize.timeline/2`; it pushes both diagrams as
+Livebook outputs.
+
+```elixir
+results = binding()[:results] || []
+results = if results == [], do: VisualizeSample.results(), else: results
+
+case AtpBenchmarkRunner.visualize(results) do
+  :ok -> :ok
+  markdowns -> Enum.each(markdowns, &IO.puts/1)
+end
+```
+
+### 9d. Report scoreboard — `AtpBenchmarkRunner.visualize(report)`
+
+```elixir
+results = binding()[:results] || []
+results = if results == [], do: VisualizeSample.results(), else: results
+
+report = AtpBenchmarkRunner.report(results)
+AtpBenchmarkRunner.visualize(report)
+```
+
+### 9e. Raw Mermaid source (copy into a markdown cell)
+
+```elixir
+results = binding()[:results] || []
+results = if results == [], do: VisualizeSample.results(), else: results
+
+target =
+  Enum.find(results, fn r ->
+    match?({:ok, _}, AtpBenchmarkRunner.Visualize.Proof.parse(r))
+  end)
+
+if target do
+  IO.puts(AtpBenchmarkRunner.Visualize.markdown(AtpBenchmarkRunner.Visualize.proof(target)))
+else
+  IO.puts("No parseable proof — nothing to show.")
+end
+```
+
+---
+
+## 10. Persist results to local store
 
 ```elixir
 run = AtpBenchmarkRunner.new_run(
@@ -394,14 +455,10 @@ run = AtpBenchmarkRunner.new_run(
   problem_timeout_seconds: 30
 )
 
-run_path = AtpBenchmarkRunner.save_run!(run)
-IO.puts("Run saved: #{run_path}")
-
-results_path = AtpBenchmarkRunner.save_results!(run, results)
-IO.puts("Results saved: #{results_path}")
-
-report_path = AtpBenchmarkRunner.save_report!(run, report)
-IO.puts("Report saved: #{report_path}")
+paths = AtpBenchmarkRunner.persist_run!(run, results, report)
+IO.puts("Run saved: #{paths.run_path}")
+IO.puts("Results saved: #{paths.results_path}")
+IO.puts("Report saved: #{paths.report_path}")
 ```
 
 Runs are persisted to the store directory from `.env`
@@ -409,7 +466,7 @@ Runs are persisted to the store directory from `.env`
 
 ---
 
-## 10. Compare with a previous run (longitudinal diff)
+## 11. Compare with a previous run (longitudinal diff)
 
 ```elixir
 prev_results_path = nil
@@ -425,7 +482,7 @@ end
 
 ---
 
-## 11. Inspect raw output (optional)
+## 12. Inspect raw output (optional)
 
 ```elixir
 target_index = 0

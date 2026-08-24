@@ -1,77 +1,42 @@
 defmodule AtpBenchmarkRunner.Provers do
   @moduledoc """
-  Registry for supported theorem prover providers.
+  Config-driven registry for supported theorem prover providers.
+
+  Every prover is declared declaratively in `priv/provers/<name>/prover.exs`
+  (next to its `Containerfile` and `apptainer.def`). The registry discovers
+  provers by scanning that directory, so adding a prover is just dropping a
+  new `priv/provers/<name>/` directory — no code changes or central lists.
   """
 
   alias AtpBenchmarkRunner.Prover
-  alias AtpBenchmarkRunner.Prover.Container
-
-  @providers [
-    AtpBenchmarkRunner.Provers.Tableaux,
-    AtpBenchmarkRunner.Provers.Vampire,
-    AtpBenchmarkRunner.Provers.EProver,
-    AtpBenchmarkRunner.Provers.CVC5,
-    AtpBenchmarkRunner.Provers.Zipperposition,
-    AtpBenchmarkRunner.Provers.Leo3,
-    AtpBenchmarkRunner.Provers.Leo2,
-    AtpBenchmarkRunner.Provers.Lash
-  ]
-
-  @aliases %{
-    zipperpin: :zipperposition,
-    zipper_position: :zipperposition,
-    e: :eprover,
-    e_prover: :eprover,
-    leo_iii: :leo3,
-    leoiii: :leo3,
-    leo_ii: :leo2,
-    leoii: :leo2
-  }
-
-  @string_names %{
-    "tableaux" => :tableaux,
-    "simple_tableaux_solver" => :tableaux,
-    "vampire" => :vampire,
-    "e" => :eprover,
-    "eprover" => :eprover,
-    "e_prover" => :eprover,
-    "cvc5" => :cvc5,
-    "zipperpin" => :zipperposition,
-    "zipperposition" => :zipperposition,
-    "zipper_position" => :zipperposition,
-    "leo3" => :leo3,
-    "leo_iii" => :leo3,
-    "leoiii" => :leo3,
-    "leo2" => :leo2,
-    "leo_ii" => :leo2,
-    "leoii" => :leo2,
-    "lash" => :lash
-  }
+  alias AtpBenchmarkRunner.Prover.{Container, Spec}
 
   @doc """
-  Returns all provider modules.
-  """
-  @spec providers() :: [module()]
-  def providers, do: @providers
-
-  @doc """
-  Returns all built-in prover descriptors.
+  Returns all discovered prover descriptors.
   """
   @spec all() :: [Prover.t()]
-  def all, do: Enum.map(@providers, & &1.prover())
+  def all, do: Spec.load_all().provers
+
+  @doc """
+  Returns all prover names discovered from `priv/provers/*/prover.exs`.
+  """
+  @spec names() :: [atom()]
+  def names, do: Spec.discover()
 
   @doc """
   Fetches a prover by canonical name or alias.
   """
   @spec fetch(atom() | binary()) :: {:ok, Prover.t()} | :error
   def fetch(name) do
-    normalized = canonical_name(name)
+    case canonical_name(name) do
+      :unknown ->
+        :error
 
-    all()
-    |> Enum.find(&(&1.name == normalized))
-    |> case do
-      nil -> :error
-      prover -> {:ok, prover}
+      canonical ->
+        case Enum.find(all(), &(&1.name == canonical)) do
+          nil -> :error
+          prover -> {:ok, prover}
+        end
     end
   end
 
@@ -87,23 +52,32 @@ defmodule AtpBenchmarkRunner.Provers do
   end
 
   @doc """
-  Returns container metadata for all known providers.
+  Returns the output parser declared by a prover (`:szs` when unknown).
   """
-  @spec containers() :: [Container.t()]
-  def containers, do: Enum.map(@providers, & &1.container())
+  @spec parser_for(atom() | binary() | Prover.t()) :: atom() | tuple()
+  def parser_for(%Prover{} = prover), do: prover.parser
+
+  def parser_for(name) do
+    case fetch(name) do
+      {:ok, prover} -> prover.parser
+      :error -> :szs
+    end
+  end
+
+  @doc """
+  Returns container metadata keyed by prover name.
+  """
+  @spec containers() :: %{optional(atom()) => Container.t()}
+  def containers, do: Spec.load_all().containers
 
   @doc """
   Fetches container metadata by prover name or alias.
   """
   @spec container!(atom() | binary()) :: Container.t()
   def container!(name) do
-    canonical = canonical_name(name)
-
-    @providers
-    |> Enum.find(&(&1.prover().name == canonical))
-    |> case do
+    case Map.get(containers(), canonical_name(name)) do
       nil -> raise ArgumentError, "unknown prover container #{inspect(name)}"
-      provider -> provider.container()
+      container -> container
     end
   end
 
@@ -112,33 +86,55 @@ defmodule AtpBenchmarkRunner.Provers do
   """
   @spec research_summary() :: [map()]
   def research_summary do
-    Enum.map(@providers, fn provider ->
-      prover = provider.prover()
-      container = provider.container()
+    Enum.map(all(), fn prover ->
+      container = Map.get(containers(), prover.name)
 
       %{
         name: prover.name,
         label: prover.label,
         integration: prover.metadata[:integration] || :cli,
-        container_backend: container.backend,
-        def_path: container.def_path,
-        source_url: container.source_url,
-        notes: provider.research_notes()
+        container_backend: container && container.backend,
+        def_path: container && container.def_path,
+        source_url: container && container.source_url,
+        notes: (container && container.notes) || []
       }
+    end)
+  end
+
+  @doc """
+  Validates every discovered prover spec; returns a list of issue strings.
+  Empty list means all specs are well-formed.
+  """
+  @spec validate() :: [binary()]
+  def validate do
+    Enum.flat_map(Spec.discover(), fn name ->
+      case Spec.load(name) do
+        {:ok, _prover, _container} -> []
+        {:error, reason} -> ["#{name}: #{reason}"]
+      end
     end)
   end
 
   @doc false
   @spec canonical_name(atom() | binary()) :: atom()
-  def canonical_name(name) when is_atom(name), do: Map.get(@aliases, name, name)
+  def canonical_name(name) when is_atom(name), do: canonical_name(Atom.to_string(name))
 
   def canonical_name(name) when is_binary(name) do
-    normalized =
-      name
-      |> String.trim()
-      |> String.downcase()
-      |> String.replace("-", "_")
+    Map.get(name_index(), normalize(name), :unknown)
+  end
 
-    Map.get(@string_names, normalized, :unknown)
+  # Normalized binary (canonical name + declared aliases) => canonical atom.
+  defp name_index do
+    Enum.reduce(all(), %{}, fn prover, acc ->
+      names = [Atom.to_string(prover.name) | prover.aliases || []]
+
+      Enum.reduce(names, acc, fn name, inner ->
+        Map.put(inner, normalize(name), prover.name)
+      end)
+    end)
+  end
+
+  defp normalize(name) when is_binary(name) do
+    name |> String.trim() |> String.downcase() |> String.replace("-", "_")
   end
 end

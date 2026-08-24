@@ -11,29 +11,67 @@ defmodule AtpBenchmarkRunner.LocalRunner do
       )
   """
 
-  alias AtpBenchmarkRunner.{Problem, Prover, Result}
+  alias AtpBenchmarkRunner.{Config, Input, Problem, Prover, Result}
 
   @doc """
   Returns a map of available execution methods on this machine.
 
-  Keys: `:tableaux`, `:docker`, `:escript`, `:on_path`, `:docker_images`.
+  Keys: `:tableaux`, `:docker`, `:docker_images`, `:apptainer`,
+  `:apptainer_images`, `:escript`, `:on_path`.
   """
   @spec detect_available() :: map()
   def detect_available do
-    docker_images =
-      if detect_docker_available() do
-        check_docker_images()
-      else
-        %{}
-      end
+    docker_images = if detect_docker_available(), do: check_docker_images(), else: %{}
+    apptainer_images = if detect_apptainer_available(), do: check_apptainer_images(), else: %{}
 
     %{
       tableaux: detect_tableaux_available(),
       docker: detect_docker_available(),
       docker_images: docker_images,
+      apptainer: detect_apptainer_available(),
+      apptainer_images: apptainer_images,
       escript: detect_escript_available(),
       on_path: detect_provers_on_path()
     }
+  end
+
+  @doc """
+  Returns a human-readable summary of the local execution environment
+  (detection plus per-prover image status) — one call for the notebook.
+  """
+  @spec image_status_summary() :: binary()
+  def image_status_summary do
+    avail = detect_available()
+    backend = resolve_backend(:auto)
+
+    detection = """
+    Detection:
+      tableaux: #{avail.tableaux}   docker: #{avail.docker}   apptainer: #{avail.apptainer}
+      escript:  #{avail.escript}    on PATH:  #{inspect(avail.on_path)}
+      active build backend: #{backend}
+    """
+
+    rows =
+      Prover.builtins()
+      |> Enum.map(fn prover ->
+        icon =
+          case image_status(prover.name) do
+            :available -> "✅"
+            :needs_build -> "🏗️"
+            :needs_pull -> "📥"
+            :unavailable -> "❌"
+          end
+
+        "  #{icon} #{prover.name}"
+      end)
+      |> Enum.join("\n")
+
+    detection <> "Images:\n" <> rows <> "\n"
+  end
+
+  @doc false
+  def detect_apptainer_available do
+    System.find_executable("apptainer") != nil or System.find_executable("singularity") != nil
   end
 
   @doc """
@@ -77,6 +115,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   @doc """
   Ensures the Docker image for a prover is available locally.
   Pulls from Docker Hub for official images, or builds from Dockerfile for custom ones.
+  Set `force: true` to rebuild even when the image already exists.
   """
   @spec ensure_docker_image!(Prover.t() | atom() | binary(), keyword()) :: :ok
   def ensure_docker_image!(prover, opts \\ []) do
@@ -88,7 +127,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
       is_nil(container) or is_nil(img) ->
         raise ArgumentError, "No Docker image defined for prover #{prover.name}"
 
-      docker_image_status(prover) == :available ->
+      not Keyword.get(opts, :force, false) and docker_image_status(prover) == :available ->
         :ok
 
       container.dockerfile_path ->
@@ -128,12 +167,14 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
     IO.puts("Building Docker image: #{tag} from #{dockerfile_path}")
 
-    {output, exit_code} =
-      run_cmd(
-        "docker",
-        ["build", "-t", tag, "-f", abs_path, build_dir],
-        Keyword.get(opts, :cmd_opts, [])
-      )
+    build_args =
+      if Keyword.get(opts, :force, false) do
+        ["build", "--no-cache", "-t", tag, "-f", abs_path, build_dir]
+      else
+        ["build", "-t", tag, "-f", abs_path, build_dir]
+      end
+
+    {output, exit_code} = run_cmd("docker", build_args, Keyword.get(opts, :cmd_opts, []))
 
     if exit_code != 0 do
       raise RuntimeError,
@@ -141,6 +182,137 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     end
 
     :ok
+  end
+
+  @doc """
+  Ensures a prover's Apptainer SIF exists locally, building it from its
+  `apptainer.def` into `Config.sif_dir/0` when missing (or when `force: true`).
+  """
+  @spec ensure_apptainer_image!(Prover.t() | atom() | binary(), keyword()) :: :ok
+  def ensure_apptainer_image!(prover, opts \\ []) do
+    prover = normalize_prover(prover)
+
+    if not Keyword.get(opts, :force, false) and apptainer_image_status(prover) == :available do
+      :ok
+    else
+      build_apptainer_image!(prover, opts)
+    end
+  end
+
+  @doc """
+  Builds a prover's Apptainer SIF from its `apptainer.def` into `Config.sif_dir/0`.
+
+  Uses `apptainer build --force` so an existing `.sif` is overwritten.
+  """
+  @spec build_apptainer_image!(Prover.t() | atom() | binary(), keyword()) :: :ok
+  def build_apptainer_image!(prover, opts \\ []) do
+    prover = normalize_prover(prover)
+    container = prover_metadata(prover.name) |> Map.get(:container)
+
+    def_path =
+      case container && container.def_path do
+        nil -> raise ArgumentError, "No apptainer.def defined for prover #{prover.name}"
+        path -> local_def_path(path)
+      end
+
+    sif_path = local_sif_path(prover)
+    File.mkdir_p!(Path.dirname(sif_path))
+
+    IO.puts("Building Apptainer image: #{sif_path}")
+    IO.puts("  from #{def_path}")
+
+    cmd_opts = Keyword.get(opts, :cmd_opts, [])
+
+    {output, exit_code} =
+      run_cmd("apptainer", ["build", "--force"] ++ cmd_opts ++ [sif_path, def_path], [])
+
+    if exit_code != 0 do
+      raise RuntimeError,
+            "Failed to build Apptainer image #{sif_path}: #{String.slice(output, 0, 500)}"
+    end
+
+    :ok
+  end
+
+  @doc """
+  Builds (or pulls) images for all given provers in one call.
+
+  `backend` selects the local build tool: `:auto` (default — Docker if
+  available, else Apptainer), `:docker`, or `:apptainer`. Set `force: true`
+  to rebuild every image even if already present.
+
+  `provers` may be `:all` or a list of prover names. Returns a list of
+  `{:ok, name}` / `{:error, name, reason}` and prints a progress summary.
+
+      AtpBenchmarkRunner.build_local_images!(:all)
+      AtpBenchmarkRunner.build_local_images!([:vampire, :eprover], force: true, backend: :apptainer)
+  """
+  @spec build_images!(atom() | [atom() | binary()], keyword()) ::
+          [{:ok, atom()} | {:error, atom() | binary(), binary()}]
+  def build_images!(provers, opts \\ [])
+
+  def build_images!(:all, opts), do: build_images!(Prover.builtins(), opts)
+
+  def build_images!(provers, opts) when is_list(provers) do
+    backend = resolve_backend(Keyword.get(opts, :backend, :auto))
+    force = Keyword.get(opts, :force, false)
+
+    results =
+      Enum.map(provers, fn name_or_prover ->
+        try do
+          prover = normalize_prover(name_or_prover)
+          build_one_image!(prover, backend, force)
+          {:ok, prover.name}
+        rescue
+          e -> {:error, result_name(name_or_prover), Exception.message(e)}
+        end
+      end)
+
+    print_build_summary(results)
+  end
+
+  defp result_name(%Prover{name: name}), do: name
+  defp result_name(name), do: name
+
+  defp build_one_image!(%Prover{} = prover, backend, force) do
+    case backend do
+      :docker -> ensure_docker_image!(prover, force: force)
+      :apptainer -> ensure_apptainer_image!(prover, force: force)
+    end
+
+    :ok
+  end
+
+  defp resolve_backend(:auto) do
+    if detect_docker_available(), do: :docker, else: :apptainer
+  end
+
+  defp resolve_backend(backend) when backend in [:docker, :apptainer], do: backend
+
+  defp image_status(prover) do
+    case resolve_backend(:auto) do
+      :docker -> docker_image_status(prover)
+      :apptainer -> apptainer_image_status(prover)
+    end
+  end
+
+  defp local_def_path(def_path) do
+    app_root = :code.priv_dir(:atp_benchmark_runner) |> to_string() |> Path.dirname()
+    Path.expand(def_path, app_root)
+  end
+
+  defp print_build_summary(results) do
+    success = Enum.count(results, &match?({:ok, _}, &1))
+    failure = Enum.count(results, &match?({:error, _, _}, &1))
+    IO.puts("\n#{success} built, #{failure} failed")
+
+    failed = Enum.filter(results, &match?({:error, _, _}, &1))
+
+    if failed != [] do
+      IO.puts("Failed: #{Enum.map_join(failed, ", ", fn {:error, name, _} -> name end)}")
+    end
+
+    results
   end
 
   @doc """
@@ -193,30 +365,14 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     auto_ensure = Keyword.get(opts, :auto_ensure_images, false)
     execution_strategy = Keyword.get(opts, :execution_strategy, :sequential_containers)
 
-    # Pre-ensure Docker images for all provers that need it
+    # Pre-build/pull images for all containerized provers (tableaux runs via the
+    # local escript and needs no image). `:backend` and `:force` flow through.
     if auto_ensure do
-      Enum.each(provers, fn prover ->
-        if prover.name != :tableaux do
-          container = prover_metadata(prover.name) |> Map.get(:container)
-
-          if container && container.docker_image do
-            case docker_image_status(prover.name) do
-              :needs_build ->
-                IO.puts("🏗️  Auto-building Docker image for #{prover.name}...")
-                ensure_docker_image!(prover.name)
-                IO.puts("   ✅ Done")
-
-              :needs_pull ->
-                IO.puts("📥 Auto-pulling Docker image for #{prover.name}...")
-                ensure_docker_image!(prover.name)
-                IO.puts("   ✅ Done")
-
-              _ ->
-                :ok
-            end
-          end
-        end
-      end)
+      build_images!(
+        Enum.reject(provers, &(&1.name == :tableaux)),
+        backend: Keyword.get(opts, :backend, :auto),
+        force: Keyword.get(opts, :force, false)
+      )
     end
 
     case execution_strategy do
@@ -236,32 +392,12 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
             skipped_results =
               Enum.map(skipped, fn problem ->
-                logic = problem.logic || "unknown"
-                has_funcs = has_function_symbols?(problem.path)
-
-                reason =
-                  cond do
-                    prover.name == :lash and has_funcs ->
-                      "#{prover.name} cannot handle #{problem.name}: #{logic} problem contains " <>
-                        "function symbols requiring $i (individual) types, which #{prover.name} cannot parse."
-
-                    prover.name == :lash and not has_conjecture?(problem.path) ->
-                      "#{prover.name} cannot handle #{problem.name}: problem has no conjecture and is " <>
-                        "Satisfiable — #{prover.name} is a refutation prover and cannot determine satisfiability."
-
-                    true ->
-                      "#{prover.name} is a THF-only prover. Problem #{problem.name} uses #{logic} " <>
-                        "logic which requires $i (individual) types that #{prover.name} cannot handle."
-                  end
-
                 Result.new(%{
                   problem_id: problem.id,
                   prover: prover.name,
                   szs_status: "UnsupportedLogic",
                   wall_time_ms: 0,
-                  metadata: %{
-                    reason: reason
-                  }
+                  metadata: %{reason: incompatible_reason(prover, problem)}
                 })
               end)
 
@@ -406,6 +542,41 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     end)
   end
 
+  @doc false
+  def check_apptainer_images do
+    Map.new(Prover.builtins(), fn prover -> {prover.name, apptainer_image_status(prover.name)} end)
+  end
+
+  @doc """
+  Returns the status of a prover's locally-built Apptainer SIF.
+  Returns `:available`, `:needs_build`, or `:unavailable`.
+  """
+  @spec apptainer_image_status(Prover.t() | atom() | binary()) :: atom()
+  def apptainer_image_status(prover) do
+    prover = normalize_prover(prover)
+    container = prover_metadata(prover.name) |> Map.get(:container)
+
+    cond do
+      is_nil(container) or is_nil(container.def_path) ->
+        :unavailable
+
+      File.exists?(local_sif_path(prover)) ->
+        :available
+
+      true ->
+        :needs_build
+    end
+  end
+
+  @doc false
+  @spec local_sif_path(Prover.t() | atom() | binary()) :: binary()
+  def local_sif_path(%Prover{} = prover) do
+    sif_name = prover.sif_name || Atom.to_string(prover.name)
+    Path.join(Config.sif_dir(), "#{sif_name}.sif")
+  end
+
+  def local_sif_path(name), do: name |> normalize_prover() |> local_sif_path()
+
   # --- Prover execution ---
 
   defp run_one(
@@ -444,8 +615,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
     case try_docker_or_native(prover, problem_path, timeout_seconds, verbose) do
       {:ok, output, exit_status, wall_time_ms} ->
-        Result.from_output(prover.name, problem_id, output,
-          prover: prover.name,
+        Result.from_output(prover, problem_id, output,
           problem_id: problem_id,
           problem_name: problem.name,
           exit_status: exit_status,
@@ -471,12 +641,18 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     command = Prover.render_command(prover, problem_path, timeout_seconds: timeout_seconds)
 
     if String.starts_with?(command, "apptainer ") do
-      # Try running via Docker as a fallback for containerized provers
-      if detect_docker_available() do
-        run_via_docker(prover, problem_path, command, timeout_seconds, verbose)
-      else
-        # Try native binary stripped of apptainer prefix
-        run_native_stripped(command)
+      cond do
+        # Local Apptainer is available and the prover's SIF is built locally.
+        detect_apptainer_available() and File.exists?(local_sif_path(prover)) ->
+          run_apptainer(prover, problem_path, timeout_seconds, verbose)
+
+        # Fall back to Docker for containerized provers.
+        detect_docker_available() ->
+          run_via_docker(prover, problem_path, command, timeout_seconds, verbose)
+
+        # Try the native binary stripped of the apptainer prefix.
+        true ->
+          run_native_stripped(command)
       end
     else
       # Plain CLI command
@@ -484,7 +660,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
       case System.find_executable(exe) do
         nil ->
-          {:gaveup, "Executable '#{exe}' not found on PATH. Install it or use Docker."}
+          {:gaveup, "Executable '#{exe}' not found on PATH. Install it or use Docker/Apptainer."}
 
         _ ->
           wall_start = System.monotonic_time(:millisecond)
@@ -493,6 +669,46 @@ defmodule AtpBenchmarkRunner.LocalRunner do
           {:ok, output, exit_code, wall_end - wall_start}
       end
     end
+  end
+
+  # Runs a containerized prover through the local Apptainer binary. The problem
+  # (or converted SMT/THF input) is bind-mounted to /problems, matching the
+  # Docker path so the same command templates work on Linux/macOS.
+  defp run_apptainer(prover, problem_path, timeout_seconds, verbose) do
+    problem_id = Path.rootname(problem_path) |> Path.basename()
+    sif_path = local_sif_path(prover)
+
+    {mount_dir, mount_file} = Input.local_mount(prover, problem_path)
+
+    rest =
+      prover.command_template
+      |> String.replace_prefix("apptainer exec ", "")
+      |> String.trim()
+      |> String.split(" ", trim: true)
+      |> Enum.drop(2)
+
+    prover_args =
+      Enum.map(rest, fn arg ->
+        arg
+        |> String.replace("{problem}", "/problems/#{mount_file}")
+        |> String.replace("{timeout_seconds}", to_string(timeout_seconds))
+        |> String.replace("{timeout_ms}", to_string(timeout_seconds * 1_000))
+        |> String.replace("{sif_path}", sif_path)
+        |> String.replace("{cores}", "1")
+      end)
+
+    args = ["exec", "--bind", "#{mount_dir}:/problems", sif_path] ++ prover_args
+
+    if verbose do
+      IO.puts("")
+      IO.puts("🐳 [#{problem_id}] apptainer #{Enum.join(args, " ")}")
+    end
+
+    wall_start = System.monotonic_time(:millisecond)
+    {output, exit_code} = run_cmd("apptainer", args, [])
+    wall_end = System.monotonic_time(:millisecond)
+
+    {:ok, output, exit_code, wall_end - wall_start}
   end
 
   defp run_native_stripped(command) do
@@ -576,34 +792,13 @@ defmodule AtpBenchmarkRunner.LocalRunner do
          verbose
        ) do
     problem_id = Path.rootname(problem_path) |> Path.basename()
-    problem_basename = Path.basename(problem_path, ".p")
 
-    # Special handling for CVC5: convert TPTP → SMT-LIB before running
-    # Special handling for Lash: convert FOF/CNF/TFF → THF via Elixir TptpToTHF
+    # Generic input preparation: the prover's `input` field decides whether the
+    # raw `.p` is used or a converted SMT-LIB/THF file is produced first.
     {mount_dir, mount_file} =
-      cond do
-        prover.name == :cvc5 ->
-          smt_content = AtpBenchmarkRunner.TPTPToSMT.convert_file!(problem_path)
-          smt_dir = AtpBenchmarkRunner.Config.smt_tmp_dir()
-          File.mkdir_p!(smt_dir)
-          smt_name = "#{problem_basename}.smt2"
-          File.write!(Path.join(smt_dir, smt_name), smt_content)
-          {docker_path(smt_dir), smt_name}
-
-        prover.name == :lash ->
-          thf_dir = AtpBenchmarkRunner.Config.thf_tmp_dir()
-          File.mkdir_p!(thf_dir)
-
-          thf_path =
-            AtpBenchmarkRunner.TPTP.ToTHF.ensure_thf(problem_path, :lash, output_dir: thf_dir)
-
-          {docker_path(thf_dir), Path.basename(thf_path)}
-
-        true ->
-          dir = problem_path |> Path.dirname() |> Path.expand() |> docker_path()
-          file = Path.basename(problem_path)
-          {dir, file}
-      end
+      problem_path
+      |> Input.local_mount(prover)
+      |> then(fn {dir, file} -> {docker_path(dir), file} end)
 
     # Build Docker args from the prover's command template
     rest =
@@ -635,28 +830,8 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     {output, exit_code} = run_cmd("docker", docker_args, [])
     wall_end = System.monotonic_time(:millisecond)
 
-    # Wrap CVC5 output in SZS format for compatibility with result parsing
-    output =
-      if prover.name == :cvc5 do
-        trimmed = String.trim(output)
-
-        szs_status =
-          case trimmed do
-            "sat" -> "Satisfiable"
-            "unsat" -> "Unsatisfiable"
-            "unknown" -> "Unknown"
-            _ -> nil
-          end
-
-        if szs_status do
-          "% SZS status #{szs_status}\n"
-        else
-          output
-        end
-      else
-        output
-      end
-
+    # No per-prover output rewriting: the prover's declared `parser`
+    # (`:szs` / `:smt_bare` / custom) handles status extraction in Result.
     {:ok, output, exit_code, wall_end - wall_start}
   end
 
@@ -689,28 +864,29 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   defp local_tableaux_command(problem_path, _timeout_seconds) do
     solver_root = tableaux_solver_root()
     escript = Path.join(solver_root, "simple_tableaux_solver")
+    flags = tableaux_cli_flags()
 
     cond do
       File.exists?(escript) and detect_escript_available() ->
-        # `--no-llm` forces symbolic-only: the solver defaults `llm` to true and
-        # would call OpenRouter (auto-reading the item #12 .env API key).
-        {"escript", [escript, "--no-llm", "--tptp-file", problem_path], []}
+        {"escript", [escript] ++ flags ++ [problem_path], []}
 
       File.exists?(Path.join(solver_root, "mix.exs")) ->
         {"mix",
-         [
-           "run",
-           "--no-start",
-           Path.join(solver_root, "run.exs"),
-           "--",
-           "--no-llm",
-           "--tptp-file",
-           problem_path
-         ], [cd: solver_root]}
+         ["run", "--no-start", Path.join(solver_root, "run.exs"), "--"] ++ flags ++ [problem_path],
+         [cd: solver_root]}
 
       true ->
         {"echo", ["tableaux solver not available"], []}
     end
+  end
+
+  # Derive the tableaux CLI flags from its prover.exs command_template so the
+  # local escript invocation can never drift from the container invocation.
+  defp tableaux_cli_flags do
+    "apptainer exec {sif_path} simple_tableaux_solver "
+    |> then(&String.replace_prefix(Prover.builtin!(:tableaux).command_template, &1, ""))
+    |> String.replace("{problem}", "")
+    |> String.split(" ", trim: true)
   end
 
   defp tableaux_solver_root do
@@ -797,12 +973,12 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
   @doc false
   def prover_metadata(name) do
-    provider =
-      AtpBenchmarkRunner.Provers.providers()
-      |> Enum.find(&(&1.prover().name == name))
+    case AtpBenchmarkRunner.Provers.fetch(name) do
+      {:ok, prover} ->
+        %{prover: prover, container: AtpBenchmarkRunner.Provers.container!(prover.name)}
 
-    if provider do
-      %{prover: provider.prover(), container: provider.container()}
+      :error ->
+        nil
     end
   end
 
@@ -814,39 +990,82 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   @doc """
   Filters problems to only those whose logic is supported by the prover.
 
-  For Lash specifically, this uses content-based scanning:
-  - THF/TH0: always compatible
-  - FOF/CNF/TFF: compatible — the `TPTP.ToTHF` converter emits Lash-safe TH0
-    (explicit `@`, `$i`/`$o` types, parenthesized equations), so function
-    symbols / `$i` terms are fine.
-  - Only problems with no conjecture that are Satisfiable are skipped: Lash is
-    a refutation prover and cannot determine plain Satisfiable (needs the
-    `-N`/`schedule_nontheorem` machinery not present in the image).
+  Driven by the prover spec's `supports` map:
 
-  For other provers, falls back to `:supported_logics` metadata if set.
+    * `supports.forms` — a list of logic prefixes (`[:cnf, :fof, ...]`) filters
+      by the problem's logic; `:all` (default) keeps everything.
+    * `supports.requires_conjecture?` — when `true`, skips Satisfiable problems
+      with no conjecture (refutation provers such as Lash cannot determine
+      plain Satisfiable from axioms alone). THF problems are always kept.
   """
   @spec filter_compatible_problems(Prover.t(), [Problem.t()]) :: [Problem.t()]
+  def filter_compatible_problems(%Prover{} = prover, problems) do
+    supports = prover.supports || %{}
+    forms = Map.get(supports, :forms, :all)
+    requires_conjecture? = Map.get(supports, :requires_conjecture?, false)
 
-  # Lash: content-based filtering
-  def filter_compatible_problems(%Prover{name: :lash} = _prover, problems) do
-    Enum.filter(problems, &lash_compatible?/1)
+    problems
+    |> maybe_filter_by_forms(forms)
+    |> maybe_filter_by_conjecture(requires_conjecture?)
   end
 
-  # Generic: logic-prefix based filtering
-  def filter_compatible_problems(
-        %Prover{metadata: %{supported_logics: logics}} = _prover,
-        problems
-      )
-      when is_list(logics) and logics != [] do
+  defp maybe_filter_by_forms(problems, forms) when is_list(forms) and forms != [] do
     Enum.filter(problems, fn problem ->
-      prefix =
-        problem.logic |> to_string() |> String.split("_") |> List.first() |> String.downcase()
-
-      String.to_atom(prefix) in logics
+      String.to_atom(logic_prefix(problem)) in forms
     end)
   end
 
-  def filter_compatible_problems(_prover, problems), do: problems
+  defp maybe_filter_by_forms(problems, _forms), do: problems
+
+  defp maybe_filter_by_conjecture(problems, true) do
+    Enum.filter(problems, &compatible_refutation?/1)
+  end
+
+  defp maybe_filter_by_conjecture(problems, _), do: problems
+
+  defp logic_prefix(%Problem{logic: logic}) when is_binary(logic) do
+    logic |> String.split("_") |> List.first() |> String.downcase()
+  end
+
+  defp logic_prefix(_problem), do: "unknown"
+
+  # A refutation prover proves theorems but cannot determine plain Satisfiable
+  # from axioms alone (it needs a conjecture); THF problems are always kept.
+  defp compatible_refutation?(%Problem{logic: logic, path: path, expected_status: expected})
+       when is_binary(logic) do
+    prefix = logic |> String.split("_") |> List.first() |> String.downcase()
+
+    cond do
+      prefix in ~w(thf th0) -> true
+      not has_conjecture?(path) and expected == "Satisfiable" -> false
+      true -> true
+    end
+  end
+
+  defp compatible_refutation?(_problem), do: false
+
+  # Human-readable reason for a problem skipped as incompatible.
+  defp incompatible_reason(%Prover{} = prover, %Problem{} = problem) do
+    supports = prover.supports || %{}
+    forms = Map.get(supports, :forms, :all)
+    requires_conjecture? = Map.get(supports, :requires_conjecture?, false)
+    logic = problem.logic || "unknown"
+
+    cond do
+      is_list(forms) and forms != [] and
+          String.to_atom(logic_prefix(problem)) not in forms ->
+        "#{prover.label} does not support #{logic} problems " <>
+          "(supports: #{Enum.join(forms, ", ")})"
+
+      requires_conjecture? and not has_conjecture?(problem.path) and
+          problem.expected_status == "Satisfiable" ->
+        "#{prover.label} is a refutation prover; #{problem.name} has no conjecture and is " <>
+          "Satisfiable — it cannot determine satisfiability."
+
+      true ->
+        "#{prover.label} is incompatible with #{problem.name} (#{logic})."
+    end
+  end
 
   # ── Lash compatibility helpers ──────────────────────────────────────────────
 

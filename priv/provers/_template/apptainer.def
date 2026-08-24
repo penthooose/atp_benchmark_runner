@@ -1,0 +1,30 @@
+# Apptainer definition template for a TPTP-native ATP prover (HPC .sif builds).
+# Modeled on priv/provers/vampire/apptainer.def. See docs/ADDING_A_PROVER.md.
+Bootstrap: docker
+From: buildpack-deps:stable-curl
+
+%labels
+    Maintainer AISE Bamberg
+    Prover <name>
+    Source <source_url>
+
+%post
+    set -eux
+    # Proxy for FAU compute node internet access (Fritz, Helma, etc.).
+    export HTTP_PROXY="http://proxy.nhr.fau.de:80"
+    export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
+    export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
+    export http_proxy="$HTTP_PROXY"
+    export https_proxy="$HTTPS_PROXY"
+    export no_proxy="$NO_PROXY"
+
+    # buildpack-deps:stable-curl is Debian-based (glibc) with curl/ca-certs —
+    # no package manager here (avoids setgroups/chown issues on FAU nodes).
+    # Prefer a static release binary; if you must compile from source, note
+    # that apt-get is NOT available on FAU rootless builds (see handbook).
+    curl -fsSL "<SOURCE_URL>" -o /tmp/prover.bin
+    install -m 0755 /tmp/prover.bin /usr/local/bin/<prover>
+    /usr/local/bin/<prover> --version
+
+%runscript
+    exec /usr/local/bin/<prover> "$@"

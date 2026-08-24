@@ -14,12 +14,13 @@ defmodule AtpBenchmarkRunner.Prover do
   defstruct [
     :name,
     :label,
-    :kind,
     :sif_name,
     :sif_path,
-    :executable,
     :command_template,
     parser: :szs,
+    aliases: [],
+    input: :tptp,
+    supports: %{forms: :all, requires_conjecture?: false},
     default_args: [],
     env: %{},
     enabled?: true,
@@ -29,12 +30,13 @@ defmodule AtpBenchmarkRunner.Prover do
   @type t :: %__MODULE__{
           name: atom(),
           label: binary(),
-          kind: :binary | :apptainer | :remote_service | nil,
           sif_name: binary() | nil,
           sif_path: binary() | nil,
-          executable: binary() | nil,
           command_template: binary(),
-          parser: :szs | atom(),
+          parser: :szs | :smt_bare | atom() | tuple(),
+          aliases: [binary()],
+          input: :tptp | :smt2 | :thf | {:custom, module()} | atom(),
+          supports: map(),
           default_args: keyword(),
           env: map(),
           enabled?: boolean(),
@@ -81,12 +83,14 @@ defmodule AtpBenchmarkRunner.Prover do
     %__MODULE__{
       name: normalize_name(Map.fetch!(attrs, :name)),
       label: Map.get(attrs, :label) || humanize_name(Map.fetch!(attrs, :name)),
-      kind: Map.get(attrs, :kind, :binary),
       sif_name: Map.get(attrs, :sif_name),
       sif_path: Map.get(attrs, :sif_path),
-      executable: Map.get(attrs, :executable),
       command_template: Map.fetch!(attrs, :command_template),
       parser: Map.get(attrs, :parser, :szs),
+      aliases: Map.get(attrs, :aliases, []),
+      input: Map.get(attrs, :input, :tptp),
+      supports:
+        Map.merge(%{forms: :all, requires_conjecture?: false}, Map.get(attrs, :supports, %{})),
       default_args: Map.get(attrs, :default_args, []),
       env: Map.get(attrs, :env, %{}),
       enabled?: Map.get(attrs, :enabled?, true),
@@ -118,12 +122,13 @@ defmodule AtpBenchmarkRunner.Prover do
     %{
       name: prover.name,
       label: prover.label,
-      kind: prover.kind,
       sif_name: prover.sif_name,
       sif_path: prover.sif_path,
-      executable: prover.executable,
       command_template: prover.command_template,
       parser: prover.parser,
+      aliases: prover.aliases,
+      input: prover.input,
+      supports: prover.supports,
       default_args: prover.default_args,
       env: prover.env,
       enabled?: prover.enabled?,
@@ -180,12 +185,13 @@ defmodule AtpBenchmarkRunner.Prover do
   defp known_key("enabled?"), do: :enabled?
   defp known_key("name"), do: :name
   defp known_key("label"), do: :label
-  defp known_key("kind"), do: :kind
   defp known_key("sif_name"), do: :sif_name
   defp known_key("sif_path"), do: :sif_path
-  defp known_key("executable"), do: :executable
   defp known_key("command_template"), do: :command_template
   defp known_key("parser"), do: :parser
+  defp known_key("aliases"), do: :aliases
+  defp known_key("input"), do: :input
+  defp known_key("supports"), do: :supports
   defp known_key("default_args"), do: :default_args
   defp known_key("env"), do: :env
   defp known_key("metadata"), do: :metadata

@@ -107,6 +107,33 @@ defmodule AtpBenchmarkRunner do
   def new_run(opts \\ []), do: Run.new(opts)
 
   @doc """
+  Loads a `.env` file and applies its `KEY=VALUE` pairs to the OS environment
+  (so `Config.get/2` and `hpc_connect` pick them up). Returns the parsed map.
+
+      AtpBenchmarkRunner.load_env!("path/to/.env")
+  """
+  @spec load_env!(binary()) :: map()
+  def load_env!(path) do
+    env = HpcConnect.load_env_file(path)
+    Enum.each(env, fn {k, v} -> System.put_env(k, v) end)
+    env
+  end
+
+  @doc """
+  Persists a run manifest, its parsed results, and its report in one call.
+
+  Returns `%{run_path:, results_path:, report_path:}`.
+  """
+  @spec persist_run!(Run.t(), [Result.t()], map(), keyword()) :: map()
+  def persist_run!(run, results, report, opts \\ []) do
+    %{
+      run_path: save_run!(run, opts),
+      results_path: save_results!(run, results, opts),
+      report_path: save_report!(run, report, opts)
+    }
+  end
+
+  @doc """
   Returns the built-in prover registry.
   """
   @spec built_in_provers() :: [Prover.t()]
@@ -140,10 +167,38 @@ defmodule AtpBenchmarkRunner do
 
   @doc """
   Builds selected prover Apptainer images through `hpc_connect`.
+
+  Uploads each prover's `apptainer.def` and builds the remote `.sif`. Set
+  `force: true` (alias for `force_rebuild: true`) to rebuild even if the `.sif`
+  already exists — the remote build then uses
+  `apptainer build --force --ignore-fakeroot-command`.
   """
   @spec build_prover_images!(HpcConnect.Session.t(), [Prover.t()], keyword()) :: map()
-  def build_prover_images!(session, provers, opts \\ []),
-    do: Images.build_all!(session, provers, opts)
+  def build_prover_images!(session, provers, opts \\ []) do
+    opts =
+      if Keyword.get(opts, :force, false) do
+        Keyword.put_new(opts, :force_rebuild, true)
+      else
+        opts
+      end
+
+    Images.build_all!(session, provers, opts)
+  end
+
+  @doc """
+  Builds (or pulls) local images for all given provers in one call.
+
+  `backend` selects the local build tool: `:auto` (default — Docker if
+  available, else Apptainer), `:docker`, or `:apptainer`. Set `force: true`
+  to rebuild every image even if already present. `provers` may be `:all`.
+  Returns a list of `{:ok, name}` / `{:error, name, reason}`.
+
+      AtpBenchmarkRunner.build_local_images!(:all)
+      AtpBenchmarkRunner.build_local_images!([:vampire, :eprover],
+        force: true, backend: :apptainer)
+  """
+  @spec build_local_images!(atom() | [atom() | binary()], keyword()) :: list()
+  def build_local_images!(provers, opts \\ []), do: LocalRunner.build_images!(provers, opts)
 
   @doc """
   Smoke-validates selected prover images against bundled TPTP examples.

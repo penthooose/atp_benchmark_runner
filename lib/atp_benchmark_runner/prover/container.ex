@@ -11,11 +11,8 @@ defmodule AtpBenchmarkRunner.Prover.Container do
     :def_path,
     :docker_image,
     :dockerfile_path,
-    :homepage,
     :source_url,
-    :license,
     backend: :apptainer,
-    build_args: %{},
     notes: []
   ]
 
@@ -24,11 +21,8 @@ defmodule AtpBenchmarkRunner.Prover.Container do
           def_path: binary(),
           docker_image: binary() | nil,
           dockerfile_path: binary() | nil,
-          homepage: binary() | nil,
           source_url: binary() | nil,
-          license: binary() | nil,
           backend: :apptainer | :docker | :kubernetes,
-          build_args: map(),
           notes: [binary()]
         }
 
@@ -44,11 +38,8 @@ defmodule AtpBenchmarkRunner.Prover.Container do
       def_path: Map.fetch!(attrs, :def_path),
       docker_image: Map.get(attrs, :docker_image),
       dockerfile_path: Map.get(attrs, :dockerfile_path),
-      homepage: Map.get(attrs, :homepage),
       source_url: Map.get(attrs, :source_url),
-      license: Map.get(attrs, :license),
       backend: Map.get(attrs, :backend, :apptainer),
-      build_args: Map.get(attrs, :build_args, %{}),
       notes: Map.get(attrs, :notes, [])
     }
   end
@@ -61,11 +52,8 @@ defmodule AtpBenchmarkRunner.Prover.Container do
       def_path: container.def_path,
       docker_image: container.docker_image,
       dockerfile_path: container.dockerfile_path,
-      homepage: container.homepage,
       source_url: container.source_url,
-      license: container.license,
       backend: container.backend,
-      build_args: container.build_args,
       notes: container.notes
     }
   end
