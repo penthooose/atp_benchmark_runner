@@ -69,6 +69,13 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     detection <> "Images:\n" <> rows <> "\n"
   end
 
+  @doc """
+  Prints the local execution environment summary (detection + per-prover image
+  status) directly — one call for the notebook.
+  """
+  @spec print_image_status_summary() :: :ok
+  def print_image_status_summary, do: IO.puts(image_status_summary())
+
   @doc false
   def detect_apptainer_available do
     System.find_executable("apptainer") != nil or System.find_executable("singularity") != nil

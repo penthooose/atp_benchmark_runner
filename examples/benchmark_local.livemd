@@ -38,7 +38,7 @@ this machine, sequentially.
 ## 2. Detect available execution methods
 
 ```elixir
-IO.puts(AtpBenchmarkRunner.LocalRunner.image_status_summary())
+AtpBenchmarkRunner.LocalRunner.print_image_status_summary()
 ```
 
 > **Available provers:**
@@ -183,15 +183,7 @@ IO.puts("Total results: #{length(results)}")
 # Guard: fall back to an empty list if this cell is evaluated before section 6.
 results = binding()[:results] || []
 
-IO.puts("| # | Problem | Prover | SZS Status | Wall (ms) | Solved? |")
-IO.puts("|---|---------|--------|------------|-----------|---------|")
-
-results
-|> Enum.with_index(1)
-|> Enum.each(fn {r, i} ->
-  solved = if AtpBenchmarkRunner.Result.solved?(r), do: "✅", else: "❌"
-  IO.puts("| #{i} | #{r.problem_id} | #{r.prover} | #{r.szs_status || "?"} | #{r.wall_time_ms || "?"} | #{solved} |")
-end)
+AtpBenchmarkRunner.results_table(results)
 ```
 
 ---
@@ -204,7 +196,7 @@ report = AtpBenchmarkRunner.report(results)
 IO.puts("Run ID: #{report.run_id}")
 IO.puts("Generated: #{report.generated_at}")
 IO.puts("")
-IO.puts(report.markdown)
+AtpBenchmarkRunner.print_report_markdown(report)
 ```
 
 ### Per-prover breakdown
@@ -228,7 +220,7 @@ AtpBenchmarkRunner.print_per_problem(report)
 
 ```elixir
 IO.puts("Full explained results with proofs:\n")
-AtpBenchmarkRunner.explain_full(results) |> IO.puts()
+AtpBenchmarkRunner.print_explain_full(results)
 ```
 
 ### Filtered results by prover
@@ -236,9 +228,7 @@ AtpBenchmarkRunner.explain_full(results) |> IO.puts()
 ```elixir
 target_prover = :vampire
 
-IO.puts("Verbose report for prover #{target_prover}:\n")
-AtpBenchmarkRunner.verbose_report(results, prover: target_prover, solved_only: true)
-|> Enum.each(&IO.puts/1)
+AtpBenchmarkRunner.print_verbose_report(results, prover: target_prover, solved_only: true)
 ```
 
 ### View a specific proof
@@ -253,19 +243,7 @@ AtpBenchmarkRunner.show_proof(results, target_prover, target_problem)
 ### Raw prover debug output
 
 ```elixir
-target_prover = :vampire
-target_problem = "GRP001-0"
-
-result = Enum.find(results, fn r ->
-  r.prover == target_prover and r.problem_id == target_problem
-end)
-
-if result && result.raw_output do
-  IO.puts("Raw output for #{result.problem_id} / #{result.prover}:\n")
-  IO.puts(result.raw_output)
-else
-  IO.puts("Result not found or no raw output stored (rerun with include_raw_output: true)")
-end
+AtpBenchmarkRunner.print_raw_output(results, :vampire, "GRP001-0")
 ```
 
 ### Interesting findings
@@ -474,7 +452,7 @@ prev_results_path = nil
 if prev_results_path && File.exists?(prev_results_path) do
   prev_results = AtpBenchmarkRunner.Store.load_results!(prev_results_path)
   diff = AtpBenchmarkRunner.compare_runs(prev_results, results)
-  IO.puts(AtpBenchmarkRunner.diff_markdown(diff))
+  AtpBenchmarkRunner.print_diff(diff)
 else
   IO.puts("No previous results to compare against. Set `prev_results_path` to enable.")
 end

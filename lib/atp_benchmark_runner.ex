@@ -540,21 +540,37 @@ defmodule AtpBenchmarkRunner do
   @doc """
   Prints a compact Markdown results table for the given results.
 
+  Set `memory: true` to include a Memory (KB) column (used by the HPC notebook).
+
       AtpBenchmarkRunner.results_table(results)
+      AtpBenchmarkRunner.results_table(results, memory: true)
   """
-  @spec results_table([Result.t()]) :: :ok
-  def results_table(results) do
-    IO.puts("| # | Problem | Prover | SZS Status | Wall Time (ms) | Solved? |")
-    IO.puts("|---|---------|--------|------------|-----------------|---------|")
+  @spec results_table([Result.t()], keyword()) :: :ok
+  def results_table(results, opts \\ []) do
+    memory? = Keyword.get(opts, :memory, false)
+
+    if memory? do
+      IO.puts("| # | Problem | Prover | SZS Status | Wall (ms) | Memory (KB) | Solved? |")
+      IO.puts("|---|---------|--------|------------|-----------|-------------|---------|")
+    else
+      IO.puts("| # | Problem | Prover | SZS Status | Wall (ms) | Solved? |")
+      IO.puts("|---|---------|--------|------------|-----------|---------|")
+    end
 
     results
     |> Enum.with_index(1)
     |> Enum.each(fn {r, i} ->
       solved = if Result.solved?(r), do: "✅", else: "❌"
 
-      IO.puts(
-        "| #{i} | #{r.problem_id} | #{r.prover} | #{r.szs_status || "?"} | #{r.wall_time_ms || "?"} | #{solved} |"
-      )
+      if memory? do
+        IO.puts(
+          "| #{i} | #{r.problem_id} | #{r.prover} | #{r.szs_status || "?"} | #{r.wall_time_ms || "?"} | #{r.memory_kb || "?"} | #{solved} |"
+        )
+      else
+        IO.puts(
+          "| #{i} | #{r.problem_id} | #{r.prover} | #{r.szs_status || "?"} | #{r.wall_time_ms || "?"} | #{solved} |"
+        )
+      end
     end)
   end
 
@@ -827,6 +843,76 @@ defmodule AtpBenchmarkRunner do
   """
   @spec print_per_problem(map()) :: :ok
   def print_per_problem(report), do: Report.print_per_problem(report)
+
+  @doc """
+  Prints the report's full Markdown blob to stdout (falls back to `print_report/1`
+  when the report carries no `:markdown`).
+
+      AtpBenchmarkRunner.print_report_markdown(report)
+  """
+  @spec print_report_markdown(map()) :: :ok
+  def print_report_markdown(report) do
+    if markdown = report[:markdown] || report["markdown"] do
+      IO.puts(markdown)
+    else
+      print_report(report)
+    end
+
+    :ok
+  end
+
+  @doc """
+  Prints full explained results (with proof snippets) to stdout.
+
+      AtpBenchmarkRunner.print_explain_full(results)
+  """
+  @spec print_explain_full(Result.t() | [Result.t()]) :: :ok
+  def print_explain_full(input), do: IO.puts(explain_full(input))
+
+  @doc """
+  Prints a verbose (per-result) report to stdout. Accepts the same options as
+  `verbose_report/2` (`:prover`, `:problem`, `:solved_only`, `:failed_only`).
+
+      AtpBenchmarkRunner.print_verbose_report(results, prover: :vampire, solved_only: true)
+  """
+  @spec print_verbose_report([Result.t()], keyword()) :: :ok
+  def print_verbose_report(results, opts \\ []) do
+    results |> verbose_report(opts) |> Enum.each(&IO.puts/1)
+    :ok
+  end
+
+  @doc """
+  Prints a longitudinal `compare_runs/3` diff as Markdown to stdout.
+
+      diff = AtpBenchmarkRunner.compare_runs(left, right)
+      AtpBenchmarkRunner.print_diff(diff)
+  """
+  @spec print_diff(map()) :: :ok
+  def print_diff(diff), do: IO.puts(diff_markdown(diff))
+
+  @doc """
+  Prints the raw prover output for a specific prover/problem from a result list.
+
+      AtpBenchmarkRunner.print_raw_output(results, :vampire, "GRP001-0")
+  """
+  @spec print_raw_output([Result.t()], atom() | binary(), binary()) :: :ok
+  def print_raw_output(results, prover, problem_id) do
+    result = Enum.find(results, &(&1.prover == prover and &1.problem_id == problem_id))
+
+    cond do
+      is_nil(result) ->
+        IO.puts("Result not found for #{prover} / #{problem_id}")
+
+      result.raw_output ->
+        IO.puts("Raw output for #{result.problem_id} / #{result.prover}:\n")
+        IO.puts(result.raw_output)
+
+      true ->
+        IO.puts("No raw output stored (rerun with include_raw_output: true)")
+    end
+
+    :ok
+  end
 
   @doc """
   Returns a verbose report for one or more results as a list of explain strings.
