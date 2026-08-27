@@ -3,6 +3,9 @@
   label: "AISE Tableaux Prover",
   aliases: ["tableaux", "simple_tableaux_solver"],
   sif_name: "simple_tableaux_solver",
+  # The local runner executes this prover via the item #12 escript (not a
+  # container image), so it is excluded from local image builds/ensure.
+  local_execution: :escript,
   # `--no-llm` is REQUIRED: the item #12 solver defaults `llm` to true and
   # would otherwise call OpenRouter during benchmarks.
   command_template:

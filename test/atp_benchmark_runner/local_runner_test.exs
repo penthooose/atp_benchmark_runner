@@ -123,5 +123,22 @@ defmodule AtpBenchmarkRunner.LocalRunnerTest do
     test "detects SZS status in output first" do
       assert LocalRunner.infer_tableaux_szs("% SZS status Theorem\nstatus: SAT", 0) == "Theorem"
     end
+
+    test "explicit SZS GaveUp wins over internal status: SAT" do
+      # The solver deliberately emits GaveUp when a theorem is not refuted; its
+      # internal `status: SAT` log line must not override that.
+      output = "% SZS status GaveUp\nstatus: SAT\nfinal_status: sat"
+      assert LocalRunner.infer_tableaux_szs(output, 0) == "GaveUp"
+    end
+
+    test "explicit SZS Satisfiable wins over internal status: SAT" do
+      output = "% SZS status Satisfiable\nstatus: SAT\nfinal_status: sat"
+      assert LocalRunner.infer_tableaux_szs(output, 0) == "Satisfiable"
+    end
+
+    test "explicit SZS Unsatisfiable wins over internal status: SAT" do
+      output = "% SZS status Unsatisfiable\nstatus: SAT\nfinal_status: sat"
+      assert LocalRunner.infer_tableaux_szs(output, 0) == "Unsatisfiable"
+    end
   end
 end

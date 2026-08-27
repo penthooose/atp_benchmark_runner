@@ -372,11 +372,12 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     auto_ensure = Keyword.get(opts, :auto_ensure_images, false)
     execution_strategy = Keyword.get(opts, :execution_strategy, :sequential_containers)
 
-    # Pre-build/pull images for all containerized provers (tableaux runs via the
-    # local escript and needs no image). `:backend` and `:force` flow through.
+    # Pre-build/pull images for all containerized provers. Provers that run via
+    # a local escript (declared `local_execution: :escript` — e.g. tableaux)
+    # need no image. `:backend` and `:force` flow through.
     if auto_ensure do
       build_images!(
-        Enum.reject(provers, &(&1.name == :tableaux)),
+        Enum.reject(provers, &(&1.local_execution != :container)),
         backend: Keyword.get(opts, :backend, :auto),
         force: Keyword.get(opts, :force, false)
       )
@@ -454,11 +455,11 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     timeout_seconds = Keyword.get(opts, :timeout_seconds, 60)
     problem_path = problem.path || problem.name
 
-    case prover.name do
-      :tableaux ->
+    case prover.local_execution do
+      :escript ->
         local_tableaux_command(problem_path, timeout_seconds)
 
-      _other ->
+      :container ->
         command = Prover.render_command(prover, problem_path, timeout_seconds: timeout_seconds)
 
         if String.starts_with?(command, "apptainer ") do
@@ -587,7 +588,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   # --- Prover execution ---
 
   defp run_one(
-         %Prover{name: :tableaux} = prover,
+         %Prover{local_execution: :escript} = prover,
          %Problem{} = problem,
          timeout_seconds,
          raw?,
@@ -803,8 +804,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     # Generic input preparation: the prover's `input` field decides whether the
     # raw `.p` is used or a converted SMT-LIB/THF file is produced first.
     {mount_dir, mount_file} =
-      problem_path
-      |> Input.local_mount(prover)
+      Input.local_mount(prover, problem_path)
       |> then(fn {dir, file} -> {docker_path(dir), file} end)
 
     # Build Docker args from the prover's command template
@@ -910,7 +910,13 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   @doc false
   def infer_tableaux_szs(output, exit_status) do
     cond do
-      # SZS status already in output
+      # The AISE tableaux solver emits its own authoritative `% SZS status` line.
+      # Its internal log lines (e.g. `status: SAT` when a theorem is not refuted)
+      # must NOT override that explicit status, so read the raw token first.
+      status = Result.explicit_szs_status(output) ->
+        status
+
+      # SZS status inferred from output
       status = Result.parse_szs_status(output) ->
         status
 

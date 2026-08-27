@@ -192,6 +192,26 @@ defmodule AtpBenchmarkRunner.Result do
     end
   end
 
+  @doc """
+  Extracts an explicit `SZS status` token verbatim, without plain-answer refinement.
+
+  Unlike `parse_szs_status/1`, this trusts the solver's own `SZS status` line as
+  authoritative. It is used for provers (like the AISE tableaux solver) whose
+  internal log lines (e.g. `status: SAT` when a theorem is not refuted) must not
+  override the deliberately emitted status.
+  """
+  @spec explicit_szs_status(binary()) :: binary() | nil
+  def explicit_szs_status(output) when is_binary(output) do
+    case Regex.run(
+           ~r/(?:^|\n)\s*[%#]?\s*SZS\s+status\s+([A-Za-z][A-Za-z0-9_]*)/i,
+           output,
+           capture: :all_but_first
+         ) do
+      [status] -> status
+      _ -> nil
+    end
+  end
+
   # Prefer a genuine plain-language answer over a fallback-appended status.
   # The HPC job scripts append `% SZS status GaveUp` (or Timeout) when a prover
   # emits no explicit SZS line; SMT-LIB-style provers such as cvc5 print a bare

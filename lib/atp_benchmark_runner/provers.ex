@@ -65,6 +65,19 @@ defmodule AtpBenchmarkRunner.Provers do
   end
 
   @doc """
+  Returns the canonical name of the designated in-house ("our") prover, as
+  declared by `our_prover: true` in its spec. Returns `nil` when none is set.
+  """
+  @spec our_prover() :: atom() | nil
+  def our_prover do
+    all()
+    |> Enum.filter(& &1.our_prover)
+    |> Enum.map(& &1.name)
+    |> Enum.sort()
+    |> List.first()
+  end
+
+  @doc """
   Returns container metadata keyed by prover name.
   """
   @spec containers() :: %{optional(atom()) => Container.t()}

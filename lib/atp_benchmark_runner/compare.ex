@@ -8,7 +8,7 @@ defmodule AtpBenchmarkRunner.Compare do
   Accepts raw results or local-DB records.
   """
 
-  alias AtpBenchmarkRunner.Result
+  alias AtpBenchmarkRunner.{Provers, Result}
 
   @doc """
   Compares two result lists (or local-DB record lists) and returns a diff map.
@@ -19,7 +19,7 @@ defmodule AtpBenchmarkRunner.Compare do
     left = index_by_problem_prover(left_results)
     right = index_by_problem_prover(right_results)
 
-    our_prover = Keyword.get(opts, :our_prover, :tableaux)
+    our_prover = Keyword.get(opts, :our_prover, Provers.our_prover())
     problem_ids = problem_union(left, right)
 
     per_problem =

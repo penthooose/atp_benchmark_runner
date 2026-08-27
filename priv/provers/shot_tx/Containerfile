@@ -1,0 +1,53 @@
+# ShotTx (Shot) — higher-order (Church STT) tableau prover, Elixir escript build.
+#   docker build -t docker.io/aise/atp-shot_tx:latest priv/provers/shot_tx/
+#   docker run --rm docker.io/aise/atp-shot_tx:latest --szs -t 30000 /problems/problem.p
+#
+# Source: https://github.com/jcschuster/ShotTx (the hex package `shot_tx` is
+# built from this repo). ShotTx declares `elixir: "~> 1.20"`, hence the 1.20.3
+# base image — the tableaux Containerfile uses 1.17.3 and is NOT sufficient.
+FROM docker.io/hexpm/elixir:1.20.3-erlang-28.4.3-debian-bookworm-20260824-slim AS builder
+
+# Source repo: same one the Apptainer .def uses.
+ARG SHOT_REPO=https://github.com/jcschuster/ShotTx.git
+ARG SHOT_REF=main
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates build-essential git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mix local.hex --force && mix local.rebar --force
+
+RUN git clone --depth 1 --branch "${SHOT_REF}" "${SHOT_REPO}" /opt/shot_tx
+WORKDIR /opt/shot_tx
+RUN mix deps.get && MIX_ENV=prod mix escript.build && \
+    install -m 0755 shot_tx /usr/local/bin/shot_tx.bin && \
+    /usr/local/bin/shot_tx.bin --version
+
+# The escript shebang is `#!/usr/bin/env escript`, so the runtime stage must
+# keep an Erlang installation (the hexpm/elixir base — same as the builder and
+# the Apptainer def). A bare debian-slim runtime fails with
+# "/usr/bin/env: 'escript': No such file or directory".
+FROM docker.io/hexpm/elixir:1.20.3-erlang-28.4.3-debian-bookworm-20260824-slim
+COPY --from=builder /usr/local/bin/shot_tx.bin /usr/local/bin/shot_tx.bin
+
+# Entrypoint wrapper: ShotTx refutes a conjecture, so a problem without one is
+# checked for satisfiability instead (`--sat`). The real escript is shot_tx.bin.
+# Written inline (not a context COPY) so the image builds even when the Docker
+# build context is broken (see the 2-byte context transfer note in repo memory).
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'file=""' \
+    'for a in "$@"; do' \
+    '  case "$a" in' \
+    '    -*) ;;' \
+    '    *) file="$a" ;;' \
+    '  esac' \
+    'done' \
+    'if [ -n "$file" ] && [ -f "$file" ] && ! grep -qi "conjecture" "$file"; then' \
+    '  exec /usr/local/bin/shot_tx.bin --sat "$@"' \
+    'fi' \
+    'exec /usr/local/bin/shot_tx.bin "$@"' \
+    > /usr/local/bin/shot_tx \
+    && chmod +x /usr/local/bin/shot_tx
+
+ENTRYPOINT ["/usr/local/bin/shot_tx"]

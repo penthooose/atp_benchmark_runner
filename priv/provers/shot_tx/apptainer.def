@@ -1,0 +1,82 @@
+Bootstrap: docker
+From: hexpm/elixir:1.20.3-erlang-28.4.3-debian-bookworm-20260824
+
+%labels
+    Maintainer AISE Bamberg
+    Prover ShotTx (Shot — HOL tableau prover)
+    Source https://github.com/jcschuster/ShotTx
+
+%arguments
+    SHOT_REPO = https://github.com/jcschuster/ShotTx.git
+    SHOT_REF = main
+
+%post
+    set -eux
+    # Proxy for FAU compute node internet access (Fritz, Helma, etc.)
+    export HTTP_PROXY="http://proxy.nhr.fau.de:80"
+    export HTTPS_PROXY="http://proxy.nhr.fau.de:80"
+    export NO_PROXY="localhost,127.0.0.1,::1,10.0.0.0/8,.nhr.fau.de"
+    export http_proxy="$HTTP_PROXY"
+    export https_proxy="$HTTPS_PROXY"
+    export no_proxy="$NO_PROXY"
+
+    # OCI extraction already provides Erlang OTP and Elixir 1.20.3 — ShotTx
+    # declares `elixir: "~> 1.20"`, so the 1.17.3 tableaux base is too old.
+    # No apt-get needed in %post (FAU rootless builds block it); the image
+    # carries ca-certificates, built-in :httpc, tar, and install(1).
+
+    mix local.hex --force
+    mix local.rebar --force
+
+    SHOT_REPO="${SHOT_REPO:-https://github.com/jcschuster/ShotTx.git}"
+    SHOT_REF="${SHOT_REF:-main}"
+    # Download source tarball using Erlang/Elixir built-in HTTP client
+    # (hexpm/elixir lacks curl/wget). Pass URL via env var because shell vars
+    # don't expand inside single-quoted -e argument.
+    export SHOT_URL="https://github.com/jcschuster/ShotTx/archive/refs/heads/${SHOT_REF}.tar.gz"
+    elixir -e '
+      :ssl.start()
+      :inets.start()
+      url = ~c"#{System.get_env("SHOT_URL")}"
+      {:ok, {_, _, body}} = :httpc.request(:get, {url, []}, [{:timeout, 60000}], [{:body_format, :binary}])
+      File.write!("/tmp/shot_tx.tar.gz", body)
+    '
+    mkdir -p /opt/shot_tx
+    tar -xzf /tmp/shot_tx.tar.gz -C /opt/shot_tx --strip-components=1
+    cd /opt/shot_tx
+    mix deps.get 2>&1
+    MIX_ENV=prod mix escript.build
+    install -m 0755 shot_tx /usr/local/bin/shot_tx.bin
+    /usr/local/bin/shot_tx.bin --version
+
+    # `shot_tx` entrypoint wrapper: ShotTx refutes a conjecture, so a problem
+    # without one is checked for satisfiability instead (`--sat`).
+    cat > /usr/local/bin/shot_tx <<'WRAPPER'
+#!/bin/sh
+file=""
+for a in "$@"; do
+  case "$a" in
+    -*) ;;
+    *) file="$a" ;;
+  esac
+done
+if [ -n "$file" ] && [ -f "$file" ] && ! grep -qi "conjecture" "$file"; then
+  exec /usr/local/bin/shot_tx.bin --sat "$@"
+fi
+exec /usr/local/bin/shot_tx.bin "$@"
+WRAPPER
+    chmod +x /usr/local/bin/shot_tx
+
+%runscript
+    exec /usr/local/bin/shot_tx "$@"
+
+%help
+    Build arguments:
+      --build-arg SHOT_REPO=<git-url>   source repository (default: GitHub)
+      --build-arg SHOT_REF=<ref>        branch/tag/commit to check out (default: main)
+
+    ShotTx (Shot) is our own higher-order tableau prover. It reads TPTP
+    TH0/TH1 problem files directly and emits standard `% SZS status` lines, so
+    the benchmark runner uses `input: :tptp` / `parser: :szs`. The wall-clock
+    budget is set with `-t/--timeout` (ms). For local development, build with
+    `--build-arg SHOT_REPO=<path>` pointing at a checked-out copy of the repo.

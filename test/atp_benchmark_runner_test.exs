@@ -317,21 +317,26 @@ defmodule AtpBenchmarkRunnerTest do
           Problem.new(id: "easy", name: "easy", rating: 0.0),
           Problem.new(id: "hard", name: "hard", rating: 1.0)
         ],
-        provers: [:tableaux, :vampire]
+        provers: [:tableaux, :vampire, :shot_tx]
       )
 
+    # `:shot_tx` is the designated "our prover" by default (Report/Compare).
     results = [
       Result.new(problem_id: "easy", prover: :tableaux, szs_status: "Timeout"),
       Result.new(problem_id: "easy", prover: :vampire, szs_status: "Theorem"),
-      Result.new(problem_id: "hard", prover: :tableaux, szs_status: "Theorem")
+      Result.new(problem_id: "hard", prover: :tableaux, szs_status: "Theorem"),
+      Result.new(problem_id: "hard", prover: :shot_tx, szs_status: "Theorem")
     ]
 
     report = AtpBenchmarkRunner.report(results, run)
 
     assert report.run_id == run.id
-    assert report.totals.solved_results == 2
+    assert report.totals.solved_results == 3
     assert Enum.any?(report.result_rows, &(&1.memory_kb == nil and &1.problem_id == "easy"))
-    assert [%{prover: :tableaux, buckets: buckets} | _] = report.by_rating_bucket
+
+    assert [%{prover: :tableaux, buckets: buckets}] =
+             Enum.filter(report.by_rating_bucket, &(&1.prover == :tableaux))
+
     assert Enum.any?(buckets, &(&1.bucket == "0.0-0.1"))
     assert [%{problem_id: "easy"}] = report.interesting.easy_failed_by_ours
     assert [%{problem_id: "hard"}] = report.interesting.hard_solved_by_ours
@@ -634,11 +639,12 @@ defmodule AtpBenchmarkRunnerTest do
   end
 
   test "compare_runs accepts DB-style maps with string keys" do
+    # `:shot_tx` is the default "our prover" — these use it via the default.
     left = [
       %{
         "run_id" => "db_left",
         "problem_id" => "p1",
-        "prover" => :tableaux,
+        "prover" => :shot_tx,
         "szs_status" => "Theorem",
         "solved" => true
       }
@@ -648,14 +654,14 @@ defmodule AtpBenchmarkRunnerTest do
       %{
         "run_id" => "db_right",
         "problem_id" => "p1",
-        "prover" => :tableaux,
+        "prover" => :shot_tx,
         "szs_status" => "Timeout",
         "solved" => false
       },
       %{
         "run_id" => "db_right",
         "problem_id" => "p2",
-        "prover" => :tableaux,
+        "prover" => :shot_tx,
         "szs_status" => "Theorem",
         "solved" => true
       }
@@ -671,12 +677,12 @@ defmodule AtpBenchmarkRunnerTest do
 
   test "diff_markdown produces a summary that includes new solves and regressions" do
     left = [
-      Result.new(problem_id: "p1", prover: :tableaux, szs_status: "Theorem")
+      Result.new(problem_id: "p1", prover: :shot_tx, szs_status: "Theorem")
     ]
 
     right = [
-      Result.new(problem_id: "p1", prover: :tableaux, szs_status: "Timeout"),
-      Result.new(problem_id: "p2", prover: :tableaux, szs_status: "Theorem")
+      Result.new(problem_id: "p1", prover: :shot_tx, szs_status: "Timeout"),
+      Result.new(problem_id: "p2", prover: :shot_tx, szs_status: "Theorem")
     ]
 
     diff = AtpBenchmarkRunner.compare_runs(left, right)

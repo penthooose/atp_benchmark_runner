@@ -24,6 +24,8 @@ defmodule AtpBenchmarkRunner.Prover do
     default_args: [],
     env: %{},
     enabled?: true,
+    local_execution: :container,
+    our_prover: false,
     metadata: %{}
   ]
 
@@ -40,6 +42,8 @@ defmodule AtpBenchmarkRunner.Prover do
           default_args: keyword(),
           env: map(),
           enabled?: boolean(),
+          local_execution: :container | :escript,
+          our_prover: boolean(),
           metadata: map()
         }
 
@@ -94,6 +98,8 @@ defmodule AtpBenchmarkRunner.Prover do
       default_args: Map.get(attrs, :default_args, []),
       env: Map.get(attrs, :env, %{}),
       enabled?: Map.get(attrs, :enabled?, true),
+      local_execution: Map.get(attrs, :local_execution, :container),
+      our_prover: Map.get(attrs, :our_prover, false),
       metadata: Map.get(attrs, :metadata, %{})
     }
   end
@@ -132,6 +138,8 @@ defmodule AtpBenchmarkRunner.Prover do
       default_args: prover.default_args,
       env: prover.env,
       enabled?: prover.enabled?,
+      local_execution: prover.local_execution,
+      our_prover: prover.our_prover,
       metadata: prover.metadata
     }
   end
@@ -194,6 +202,8 @@ defmodule AtpBenchmarkRunner.Prover do
   defp known_key("supports"), do: :supports
   defp known_key("default_args"), do: :default_args
   defp known_key("env"), do: :env
+  defp known_key("local_execution"), do: :local_execution
+  defp known_key("our_prover"), do: :our_prover
   defp known_key("metadata"), do: :metadata
   defp known_key(_unknown), do: nil
 end

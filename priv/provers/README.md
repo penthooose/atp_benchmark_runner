@@ -22,6 +22,7 @@ The full canonical image names use `docker.io/` prefix (e.g.
 - `leo2/`
 - `tableaux/`
 - `lash/`
+- `shot_tx/` — our own higher-order (HOL/THF) tableau prover
 - `_template/` — scaffold for adding a new prover (config is
   `prover.exs.template`; renamed to `prover.exs` on use)
 

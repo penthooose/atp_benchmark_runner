@@ -6,7 +6,7 @@ defmodule AtpBenchmarkRunner.ProverSpecTest do
   alias AtpBenchmarkRunner.{Input, LocalRunner, Problem, Prover, Provers, Result}
   alias AtpBenchmarkRunner.Prover.Spec
 
-  @prover_names ~w(cvc5 eprover lash leo2 leo3 tableaux vampire zipperposition)a
+  @prover_names ~w(cvc5 eprover lash leo2 leo3 shot_tx tableaux vampire zipperposition)a
 
   describe "config-driven registry" do
     test "discovers every prover from priv/provers/*/prover.exs" do
@@ -30,6 +30,8 @@ defmodule AtpBenchmarkRunner.ProverSpecTest do
       assert Prover.builtin!(:leo_iii).name == :leo3
       assert Prover.builtin!(:leo_ii).name == :leo2
       assert Prover.builtin!("simple_tableaux_solver").name == :tableaux
+      assert Prover.builtin!(:shot).name == :shot_tx
+      assert Prover.builtin!("shot-tx").name == :shot_tx
     end
 
     test "unknown names still resolve to :error without creating atoms" do
@@ -55,6 +57,41 @@ defmodule AtpBenchmarkRunner.ProverSpecTest do
       # tableaux is the one prover whose SIF/image name differs from its atom.
       assert Prover.builtin!(:tableaux).sif_name == "simple_tableaux_solver"
       assert Provers.container!(:tableaux).image_name == "simple_tableaux_solver"
+      # shot_tx derives both from its name (no override in the spec).
+      assert Prover.builtin!(:shot_tx).sif_name == "shot_tx"
+      assert Provers.container!(:shot_tx).image_name == "shot_tx"
+    end
+
+    test "config declares the in-house prover and local execution mode" do
+      # `our_prover: true` in the shot_tx spec drives Report/Compare defaults.
+      assert Provers.our_prover() == :shot_tx
+      assert Prover.builtin!(:shot_tx).our_prover
+      refute Prover.builtin!(:tableaux).our_prover
+
+      # `local_execution: :escript` (tableaux) vs the container default.
+      assert Prover.builtin!(:tableaux).local_execution == :escript
+      assert Prover.builtin!(:shot_tx).local_execution == :container
+      assert Prover.builtin!(:vampire).local_execution == :container
+    end
+
+    test "a spec with an invalid local_execution or our_prover is rejected" do
+      dir = Spec.specs_dir()
+      tmp_name = "zzz_invalid_mode_prover"
+
+      try do
+        tmp_dir = Path.join(dir, tmp_name)
+        File.mkdir_p!(tmp_dir)
+
+        File.write!(
+          Path.join(tmp_dir, "prover.exs"),
+          ~s(%{name: :zzz_invalid_mode, local_execution: :binary, our_prover: "yes", command_template: "x {problem}", container: %{def_path: "a", dockerfile_path: "b", docker_image: "c"}})
+        )
+
+        assert {:error, reason} = Spec.load(tmp_name)
+        assert reason =~ "local_execution" or reason =~ "our_prover"
+      after
+        File.rm_rf!(Path.join(dir, tmp_name))
+      end
     end
 
     test "a spec file with an unknown key is rejected" do

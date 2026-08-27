@@ -3,7 +3,7 @@ defmodule AtpBenchmarkRunner.Report do
   Aggregates benchmark results into comparison-friendly summaries.
   """
 
-  alias AtpBenchmarkRunner.{Problem, Result, Run}
+  alias AtpBenchmarkRunner.{Problem, Provers, Result, Run}
 
   @doc """
   Builds a report map suitable for Livebook tables, Markdown, or JSON export.
@@ -12,7 +12,7 @@ defmodule AtpBenchmarkRunner.Report do
   def summarize(results, run \\ nil, opts \\ []) when is_list(results) do
     normalized = Enum.map(results, &normalize_result/1)
     problems = problem_index(run)
-    our_prover = Keyword.get(opts, :our_prover, :tableaux)
+    our_prover = Keyword.get(opts, :our_prover, Provers.our_prover())
     generated_at = Keyword.get(opts, :generated_at, timestamp())
 
     %{
@@ -32,8 +32,8 @@ defmodule AtpBenchmarkRunner.Report do
   @doc """
   Converts a report to a concise Markdown summary.
   """
-  @spec markdown_summary([Result.t()], map(), atom()) :: binary()
-  def markdown_summary(results, problems \\ %{}, our_prover \\ :tableaux) do
+  @spec markdown_summary([Result.t()], map(), atom() | nil) :: binary()
+  def markdown_summary(results, problems \\ %{}, our_prover \\ Provers.our_prover()) do
     rows = by_prover(results)
 
     table =

@@ -23,6 +23,10 @@
   #   input:    :tptp (default) | :smt2 | :thf | {:custom, Mod}
   #   parser:   :szs   (default) | :smt_bare | {:custom, Mod}
   #   supports: %{forms: [:fof, ...], requires_conjecture?: true}
+  #   local_execution: :container (default) | :escript  (local runner; escript
+  #       provers are skipped by local image builds — see tableaux)
+  #   our_prover: true  (designates the in-house prover; resolved by
+  #       `Provers.our_prover/0` as the Report/Compare "ours" default)
   # input: :smt2
 
   container: %{

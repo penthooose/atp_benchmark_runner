@@ -39,6 +39,8 @@ defmodule AtpBenchmarkRunner.Prover.Spec do
     :command_template,
     :input,
     :parser,
+    :local_execution,
+    :our_prover,
     :supports,
     :container,
     :metadata
@@ -226,6 +228,21 @@ defmodule AtpBenchmarkRunner.Prover.Spec do
     unless parser in [:szs, :smt_bare] or
              (is_tuple(parser) and match?({:custom, mod} when is_atom(mod), parser)) do
       raise ArgumentError, "unsupported `parser` #{inspect(parser)} in #{file}"
+    end
+
+    local_execution = Map.get(spec, :local_execution, :container)
+
+    unless local_execution in [:container, :escript] do
+      raise ArgumentError,
+            "unsupported `local_execution` #{inspect(local_execution)} in #{file}; " <>
+              "expected :container or :escript"
+    end
+
+    our_prover = Map.get(spec, :our_prover, false)
+
+    unless is_boolean(our_prover) do
+      raise ArgumentError,
+            "`our_prover` must be a boolean in #{file}, got #{inspect(our_prover)}"
     end
 
     validate_placeholders!(Map.fetch!(spec, :command_template), file)

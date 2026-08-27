@@ -10,6 +10,7 @@ defmodule AtpBenchmarkRunner do
   alias AtpBenchmarkRunner.{
     Compare,
     Config,
+    MultiRun,
     Notification,
     Problem,
     Prover,
@@ -622,6 +623,71 @@ defmodule AtpBenchmarkRunner do
   """
   @spec diff_markdown(map()) :: binary()
   def diff_markdown(diff), do: Compare.markdown(diff)
+
+  @doc """
+  Loads every stored benchmark run (newest first), skipping empty/malformed files.
+
+      AtpBenchmarkRunner.load_all_runs()
+  """
+  @spec load_all_runs(keyword()) :: [map()]
+  def load_all_runs(opts \\ []), do: MultiRun.load_all_runs(opts)
+
+  @doc """
+  Computes cross-run comparison statistics over all stored runs (or a given list).
+
+  Aggregates each (problem, prover) across every stored `*.results.json` and
+  derives per-prover min/max/avg/best times and a ranking by solved problems.
+  Statuses like `InputError`/`UnsupportedLogic` are treated as non-attempts by
+  default (`:exclude_statuses` option); timeouts always count as real attempts.
+
+      stats = AtpBenchmarkRunner.multi_run_stats()
+      stats = AtpBenchmarkRunner.multi_run_stats([], only_common_problems: true)
+  """
+  @spec multi_run_stats([map()] | nil, keyword()) :: map()
+  def multi_run_stats(runs \\ nil, opts \\ []), do: MultiRun.stats(runs, opts)
+
+  @doc """
+  Returns the cross-run comparison statistics as Markdown.
+  """
+  @spec multi_run_markdown(map(), keyword()) :: binary()
+  def multi_run_markdown(stats, opts \\ []), do: MultiRun.markdown(stats, opts)
+
+  @doc """
+  One-call cross-run comparison: loads all stored runs, computes statistics,
+  prints the Markdown (best-time matrix, time ranges, prover ranking) and
+  returns the stats map.
+
+      AtpBenchmarkRunner.compare_all_runs()
+      AtpBenchmarkRunner.compare_all_runs(exclude_statuses: ["InputError"])
+  """
+  @spec compare_all_runs(keyword()) :: map()
+  def compare_all_runs(opts \\ []) do
+    stats = MultiRun.stats(nil, opts)
+    MultiRun.print(stats, opts)
+    stats
+  end
+
+  @doc """
+  Renders the cross-run comparison for Livebook.
+
+  Returns a `Kino.Markdown` when Kino is running, otherwise a markdown string.
+  """
+  @spec compare_all_runs_panel(keyword()) :: term()
+  def compare_all_runs_panel(opts \\ []) do
+    stats = MultiRun.stats(nil, opts)
+    MultiRun.panel(stats, opts)
+  end
+
+  @doc """
+  Writes the cross-run comparison Markdown to `path` and returns the path.
+
+      AtpBenchmarkRunner.save_multi_run_stats!("C:/tmp/atp_benchmark_runner_store/comparison.md")
+  """
+  @spec save_multi_run_stats!(binary(), [map()] | nil, keyword()) :: binary()
+  def save_multi_run_stats!(path, runs \\ nil, opts \\ []) do
+    stats = MultiRun.stats(runs, opts)
+    MultiRun.save!(path, stats, opts)
+  end
 
   defp resolve_side(%Run{} = _run, _opts), do: []
   defp resolve_side(results, _opts) when is_list(results), do: results

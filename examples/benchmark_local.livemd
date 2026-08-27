@@ -119,13 +119,13 @@ end
 
 ## 5. Select provers and problems
 
-All eight provers, including our own `:tableaux` solver. Problems are selected
-by name — they resolve from `TPTP_ROOT`, the bundled examples, or a livebook
-cache automatically.
+Problems are selected by name. They resolve from `TPTP_ROOT`, the
+bundled examples, or a livebook cache automatically.
 
 ```elixir
 selected_provers = [
   :tableaux,
+  :shot_tx,
   :eprover,
   :vampire,
   :cvc5,
@@ -226,15 +226,16 @@ AtpBenchmarkRunner.print_explain_full(results)
 ### Filtered results by prover
 
 ```elixir
-target_prover = :vampire
+target_prover = :shot_tx
 
-AtpBenchmarkRunner.print_verbose_report(results, prover: target_prover, solved_only: true)
+AtpBenchmarkRunner.print_verbose_report(results, prover: target_prover, solved_only: false)
+
 ```
 
 ### View a specific proof
 
 ```elixir
-target_prover = :vampire
+target_prover = :shot_tx
 target_problem = "GRP001-0"
 
 AtpBenchmarkRunner.show_proof(results, target_prover, target_problem)
@@ -243,7 +244,7 @@ AtpBenchmarkRunner.show_proof(results, target_prover, target_problem)
 ### Raw prover debug output
 
 ```elixir
-AtpBenchmarkRunner.print_raw_output(results, :vampire, "GRP001-0")
+AtpBenchmarkRunner.print_raw_output(results, :shot_tx, "GRP001-0")
 ```
 
 ### Interesting findings
@@ -460,7 +461,58 @@ end
 
 ---
 
-## 12. Inspect raw output (optional)
+## 12. Cross-run comparison & statistics
+
+Compares **all** stored runs at once. Results stay in JSON files under the
+store dir (no database yet — columns may still change during development).
+Each (problem, prover) is aggregated across every run, producing:
+
+- a per-problem × prover **best-time heatmap** (min time per prover; fastest solver green → slowest red, rainbow in between; unsolved gray),
+
+* a per-problem × prover **time-range matrix** (min–max ms across runs),
+* a **prover ranking** by solved problems.
+
+Ranking counts `Timeout`/`GaveUp` as real attempts (never excluded). By default
+`InputError`/`TypeError`/`UnsupportedLogic`/`Error` are treated as non-attempts
+(prover not applicable to that problem) — override with `:exclude_statuses`
+(pass `[]` to include them).
+
+```elixir
+# One call: load all runs, aggregate, and print the comparison tables.
+stats = AtpBenchmarkRunner.compare_all_runs()
+```
+
+```elixir
+# Livebook-friendly panel (Kino.Markdown when available).
+AtpBenchmarkRunner.MultiRun.panel(stats)
+```
+
+```elixir
+# Save the comparison as a Markdown file.
+path =
+  AtpBenchmarkRunner.save_multi_run_stats!(
+    Path.join(AtpBenchmarkRunner.store_dir(), "comparison.md")
+  )
+
+IO.puts("Comparison saved: #{path}")
+```
+
+```elixir
+# Same-problem-set ranking + error-status control.
+# only_common_problems: rank only on problems every prover ran.
+# exclude_statuses: [] keeps input/type errors as real attempts.
+stats_common =
+  AtpBenchmarkRunner.multi_run_stats(nil,
+    only_common_problems: true,
+    exclude_statuses: []
+  )
+
+AtpBenchmarkRunner.MultiRun.print(stats_common)
+```
+
+---
+
+## 13. Inspect raw output (optional)
 
 ```elixir
 target_index = 0

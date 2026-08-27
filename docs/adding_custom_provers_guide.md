@@ -38,20 +38,22 @@ for custom conversion/parsing by non-Elixir contributors is a roadmap item (see
 Only the keys below are recognized; anything else is rejected on load, so a
 spec cannot silently carry unused or misspelled fields.
 
-| Key                         | Required | Meaning                                                                                                                       |
-| --------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `name`                      | ✅       | Canonical atom used everywhere (`:vampire`)                                                                                   |
-| `command_template`          | ✅       | Container invocation; placeholders `{problem}`, `{timeout_seconds}`, `{timeout_ms}`, `{sif_path}`, `{result_file}`, `{cores}` |
-| `container.def_path`        | ✅       | Path to `apptainer.def` (HPC build)                                                                                           |
-| `container.docker_image`    | ✅       | Docker image tag (local build/run)                                                                                            |
-| `container.dockerfile_path` | ✅       | Path to `Containerfile` (local build)                                                                                         |
-| `label`                     |          | Display name (GUI dropdown, reports); defaults to humanized `name`                                                            |
-| `aliases`                   |          | Alternate lookup names, e.g. `["e", "e_prover"]` for eprover                                                                  |
-| `sif_name`                  |          | SIF/image name when it differs from `name` (e.g. tableaux → `simple_tableaux_solver`)                                         |
-| `input`                     |          | `:tptp` (default), `:smt2`, `:thf`, `{:custom, Mod}`                                                                          |
-| `parser`                    |          | `:szs` (default), `:smt_bare`, `{:custom, Mod}`                                                                               |
-| `supports`                  |          | `%{forms: [:fof, ...], requires_conjecture?: true}` overlaid on defaults                                                      |
-| `metadata.logics`           |          | Used by the HPC image smoke test to pick a compatible example                                                                 |
+| Key                         | Required | Meaning                                                                                                                               |
+| --------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                      | ✅       | Canonical atom used everywhere (`:vampire`)                                                                                           |
+| `command_template`          | ✅       | Container invocation; placeholders `{problem}`, `{timeout_seconds}`, `{timeout_ms}`, `{sif_path}`, `{result_file}`, `{cores}`         |
+| `container.def_path`        | ✅       | Path to `apptainer.def` (HPC build)                                                                                                   |
+| `container.docker_image`    | ✅       | Docker image tag (local build/run)                                                                                                    |
+| `container.dockerfile_path` | ✅       | Path to `Containerfile` (local build)                                                                                                 |
+| `label`                     |          | Display name (GUI dropdown, reports); defaults to humanized `name`                                                                    |
+| `aliases`                   |          | Alternate lookup names, e.g. `["e", "e_prover"]` for eprover                                                                          |
+| `sif_name`                  |          | SIF/image name when it differs from `name` (e.g. tableaux → `simple_tableaux_solver`)                                                 |
+| `input`                     |          | `:tptp` (default), `:smt2`, `:thf`, `{:custom, Mod}`                                                                                  |
+| `parser`                    |          | `:szs` (default), `:smt_bare`, `{:custom, Mod}`                                                                                       |
+| `local_execution`           |          | `:container` (default) or `:escript` — how the _local_ runner executes the prover (escript provers are skipped by local image builds) |
+| `our_prover`                |          | `true` marks the designated in-house prover; `Provers.our_prover/0` resolves it, so `Report`/`Compare` use it as the "ours" default   |
+| `supports`                  |          | `%{forms: [:fof, ...], requires_conjecture?: true}` overlaid on defaults                                                              |
+| `metadata.logics`           |          | Used by the HPC image smoke test to pick a compatible example                                                                         |
 
 `container.image_name` defaults to `sif_name`; `sif_name` defaults to `name` —
 only override when they differ.
