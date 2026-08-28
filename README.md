@@ -334,9 +334,24 @@ AtpBenchmarkRunner.send_webhook_notification(report, submitted)
 ## Livebook dashboard
 
 ```elixir
+setup =
+  HpcConnect.prepare_livebook_session(
+    env_file: Path.expand("../.env", __DIR__),
+    fallback_env_file: Path.expand("../.env.example", __DIR__),
+    submit_label: "Setup"
+  )
+
+env_map = setup.env_map
+env_file = setup.env_file
+
 boot =
-  HpcConnect.prepare_livebook_session(cluster: :fritz, persist_form: true)
-  |> HpcConnect.bootstrap()
+  HpcConnect.bootstrap(
+    mode: :local,
+    env_file: env_file,
+    cluster: env_map["HPC_CONNECT_CLUSTER"] || "fritz",
+    username: env_map["HPC_CONNECT_USERNAME"],
+    key_path: env_map["HPC_CONNECT_IDENTITY_FILE"]
+  )
 
 AtpBenchmarkRunner.livebook_dashboard(boot.session)
 AtpBenchmarkRunner.tptp_panel()

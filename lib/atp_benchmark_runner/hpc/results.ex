@@ -4,7 +4,7 @@ defmodule AtpBenchmarkRunner.HPC.Results do
   """
 
   alias AtpBenchmarkRunner.{Result, Run, Store}
-  alias AtpBenchmarkRunner.HPC.{JobScript, RemoteFiles, Shell}
+  alias AtpBenchmarkRunner.HPC.{Config, JobScript, RemoteFiles, Shell}
 
   @doc """
   Collects all remote result metadata/output files for a run.
@@ -14,14 +14,34 @@ defmodule AtpBenchmarkRunner.HPC.Results do
 
   Retries with exponential backoff on transient SSH failures so results are
   eventually collected even when the SSH gateway is under load.
+
+  ## Options
+
+    * `:wait_for_job` — when `true` (default) and the run has SLURM job ids, the
+      job state is polled (cheap `sacct`) while the job is still running and the
+      expensive tar+SCP download is skipped until the job terminates. Runs
+      without job ids (e.g. remote-discovered) always fall back to direct
+      fetching. Set `false` to keep the old fetch-every-poll behavior.
   """
   @spec collect(HpcConnect.Session.t(), Run.t(), keyword()) :: [Result.t()]
   def collect(%HpcConnect.Session{} = session, %Run{} = run, opts \\ []) do
     max_retries = Keyword.get(opts, :collect_max_retries, 30)
     retry_delay_ms = Keyword.get(opts, :collect_retry_delay_ms, 10_000)
     expected = expected_result_count(run, opts)
+    forever? = Keyword.get(opts, :collect_retry_forever, false)
+    wait_for_job = Keyword.get(opts, :wait_for_job, true)
 
-    collect_with_retry(session, run, opts, max_retries, retry_delay_ms, expected)
+    collect_with_retry(
+      session,
+      run,
+      opts,
+      max_retries,
+      retry_delay_ms,
+      expected,
+      forever?,
+      wait_for_job,
+      0
+    )
   end
 
   # The runner knows how many (prover × problem) results should exist. When an
@@ -41,7 +61,17 @@ defmodule AtpBenchmarkRunner.HPC.Results do
     end
   end
 
-  defp collect_with_retry(session, run, opts, 0, _delay, _expected) do
+  defp collect_with_retry(
+         session,
+         run,
+         opts,
+         0,
+         _delay,
+         _expected,
+         _forever,
+         _wait_for_job,
+         _prev_count
+       ) do
     IO.puts("[Results] Max retries reached — returning partial results or empty")
 
     case try_collect(session, run, opts) do
@@ -54,74 +84,148 @@ defmodule AtpBenchmarkRunner.HPC.Results do
     end
   end
 
-  defp collect_with_retry(session, run, opts, retries_left, delay_ms, expected) do
-    result = try_collect(session, run, opts)
+  defp collect_with_retry(
+         session,
+         run,
+         opts,
+         retries_left,
+         delay_ms,
+         expected,
+         forever?,
+         wait_for_job,
+         prev_count
+       ) do
+    # While `:wait_for_job` is set (default), avoid repeatedly re-downloading the
+    # whole results tar on every poll while the SLURM job is still running — the
+    # download is the expensive part and its contents only change as the job
+    # writes new results. Poll the (cheap) sacct job state instead and only fetch
+    # once the job has terminated.
+    status = if wait_for_job, do: job_status(session, run), else: :unknown
 
-    case result do
-      {:ok, results} when results != [] ->
-        if is_integer(expected) and length(results) < expected do
-          retry_note(
-            "[Results]",
-            "collected #{length(results)}/#{expected} results so far",
-            retries_left,
-            delay_ms
-          )
+    if status == :running do
+      retry_note(
+        "[Results]",
+        "job still running — waiting for completion before fetching",
+        retries_left,
+        delay_ms,
+        forever?
+      )
 
+      Process.sleep(delay_ms)
+
+      collect_with_retry(
+        session,
+        run,
+        opts,
+        next_retry(retries_left, forever?),
+        min(delay_ms * 2, 60_000),
+        expected,
+        forever?,
+        wait_for_job,
+        prev_count
+      )
+    else
+      result = try_collect(session, run, opts)
+
+      case result do
+        {:ok, results} when results != [] ->
+          if is_integer(expected) and length(results) < expected do
+            # Once the job has terminated, a fetch that returns the same count as
+            # the previous one means the run is complete with what it produced
+            # (some problems may legitimately yield no result file) — stop
+            # re-downloading instead of looping forever on an unreachable target.
+            if status == :terminal and prev_count == length(results) do
+              IO.puts(
+                "[Results] Collected #{length(results)} results — stable after job " <>
+                  "termination, assuming complete"
+              )
+
+              results
+            else
+              retry_note(
+                "[Results]",
+                "collected #{length(results)}/#{expected} results so far",
+                retries_left,
+                delay_ms,
+                forever?
+              )
+
+              Process.sleep(delay_ms)
+
+              collect_with_retry(
+                session,
+                run,
+                opts,
+                next_retry(retries_left, forever?),
+                min(delay_ms * 2, 60_000),
+                expected,
+                forever?,
+                wait_for_job,
+                length(results)
+              )
+            end
+          else
+            results
+          end
+
+        {:ok, []} ->
+          retry_note("[Results]", "no result files found yet", retries_left, delay_ms, forever?)
           Process.sleep(delay_ms)
 
           collect_with_retry(
             session,
             run,
             opts,
-            retries_left - 1,
+            next_retry(retries_left, forever?),
             min(delay_ms * 2, 60_000),
-            expected
+            expected,
+            forever?,
+            wait_for_job,
+            prev_count
           )
-        else
-          results
-        end
 
-      {:ok, []} ->
-        retry_note("[Results]", "no result files found yet", retries_left, delay_ms)
-        Process.sleep(delay_ms)
+        {:error, reason} ->
+          retry_note("[Results]", "SSH error", retries_left, delay_ms, forever?, reason)
+          Process.sleep(delay_ms)
 
-        collect_with_retry(
-          session,
-          run,
-          opts,
-          retries_left - 1,
-          min(delay_ms * 2, 60_000),
-          expected
-        )
-
-      {:error, reason} ->
-        retry_note("[Results]", "SSH error", retries_left, delay_ms, reason)
-        Process.sleep(delay_ms)
-
-        collect_with_retry(
-          session,
-          run,
-          opts,
-          retries_left - 1,
-          min(delay_ms * 2, 60_000),
-          expected
-        )
+          collect_with_retry(
+            session,
+            run,
+            opts,
+            next_retry(retries_left, forever?),
+            min(delay_ms * 2, 60_000),
+            expected,
+            forever?,
+            wait_for_job,
+            prev_count
+          )
+      end
     end
   end
 
+  # In "retry until success" mode the counter is never decremented, so the
+  # collection keeps polling with exponential backoff until the results arrive.
+  defp next_retry(retries_left, true), do: retries_left
+  defp next_retry(retries_left, false), do: retries_left - 1
+
   # Muted retry logging: a one-line note while many retries remain; the full
   # (potentially huge) reason / command dump only when about to give up.
-  defp retry_note(label, kind, retries_left, delay_ms, detail \\ nil) do
+  defp retry_note(label, kind, retries_left, delay_ms, forever?, detail \\ nil) do
+    left =
+      if forever? do
+        "∞ (retrying until success)"
+      else
+        "#{retries_left} retries left"
+      end
+
     detail_part =
-      if not is_nil(detail) and retries_left <= 2 do
+      if not is_nil(detail) and (forever? or retries_left <= 2) do
         " — #{truncate_text(detail, 240)}"
       else
         ""
       end
 
-    IO.puts(
-      "#{label} #{kind}#{detail_part} — #{retries_left} retries left, retrying in #{delay_ms}ms"
-    )
+    IO.puts("#{label} #{kind}#{detail_part} — #{left}, retrying in #{delay_ms}ms")
   end
 
   defp truncate_text(text, max) when is_binary(text) do
@@ -129,6 +233,74 @@ defmodule AtpBenchmarkRunner.HPC.Results do
   end
 
   defp truncate_text(text, _max), do: to_string(text)
+
+  # Determines whether a run's SLURM jobs are still active. Returns:
+  #
+  #   * `:running`  — at least one submitted job is not in a terminal state
+  #   * `:terminal` — all submitted jobs reached a terminal state (or are gone
+  #     from sacct, i.e. finished)
+  #   * `:unknown`  — the run has no trackable job ids, or the query failed
+  #
+  # Runs without job ids (e.g. a minimal `%Run{}` reconstructed via remote
+  # discovery) always report `:unknown`, so collection falls back to the
+  # plain count-based retry instead of waiting forever.
+  defp job_status(%HpcConnect.Session{} = session, %Run{} = run) do
+    job_ids = run_job_ids(run)
+
+    if job_ids == [] do
+      :unknown
+    else
+      ids = Enum.join(job_ids, ",")
+
+      command =
+        "sacct -j #{ids} --noheader --format=JobID,State --parsable2 2>/dev/null | " <>
+          "sed 's/\\x1b\\[[0-9;]*m//g' | grep -v '^$' | grep -v 'WARNING' | grep -v 'Path' | " <>
+          "grep -v '!!!' | awk -F'|' '$1 ~ /^[0-9]+$/ {print $1, $2}'"
+
+      try do
+        session
+        |> HpcConnect.connect!(command)
+        |> String.trim()
+        |> classify_job_output()
+      rescue
+        _ -> :unknown
+      end
+    end
+  end
+
+  defp run_job_ids(%Run{} = run) do
+    run.submitted_jobs
+    |> Map.values()
+    |> Enum.map(&(Map.get(&1, :job_id) || Map.get(&1, "job_id")))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&to_string/1)
+  end
+
+  # Pure classification of raw sacct output — exposed (doc false) for unit
+  # testing without an SSH session.
+  @doc false
+  @spec classify_job_output(binary()) :: :running | :terminal
+  def classify_job_output(""), do: :terminal
+
+  def classify_job_output(output) do
+    states =
+      output
+      |> String.split("\n", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.flat_map(fn line ->
+        case String.split(line, ~r{\s+}, parts: 2) do
+          [_job_id, state] -> [Config.terminal_state?(String.trim(state))]
+          _ -> []
+        end
+      end)
+
+    cond do
+      states == [] -> :terminal
+      Enum.all?(states) -> :terminal
+      true -> :running
+    end
+  end
 
   defp try_collect(session, run, opts) do
     paths = remote_paths(run, session, opts)
@@ -259,6 +431,10 @@ defmodule AtpBenchmarkRunner.HPC.Results do
   defp do_scp_download(%HpcConnect.Session{} = session, remote_path, local_path) do
     scp_bin = System.find_executable("scp") || "scp"
     target = scp_target(session)
+
+    if session.extended_debug do
+      IO.puts("[hpc-ext-debug] scp: #{target}:#{remote_path} → #{local_path}")
+    end
 
     # Remove existing local file so a fresh download doesn't merge with a stale partial
     File.rm_rf!(local_path)
@@ -460,6 +636,116 @@ defmodule AtpBenchmarkRunner.HPC.Results do
   def collect_and_store!(%HpcConnect.Session{} = session, %Run{} = run, opts \\ []) do
     results = collect(session, run, opts)
     {Store.save_results!(run, results, opts), results}
+  end
+
+  @doc """
+  Finds a run's results directory on the remote cluster by run id and returns a
+  minimal `%Run{}` (id + remote_root) that `collect/3` can use, or `nil`.
+
+  Searches both the current `run_results/<id>` layout and the legacy `<id>`
+  layout, across the config-resolved remote root and the session work/vault
+  roots. Used as a fallback when a run has no local manifest (e.g. submitted
+  before manifest persistence was added, or after a store wipe).
+  """
+  @spec find_remote_run(HpcConnect.Session.t(), binary(), keyword()) :: Run.t() | nil
+  def find_remote_run(%HpcConnect.Session{} = session, run_id, opts \\ [])
+      when is_binary(run_id) do
+    root =
+      Enum.find_value(candidate_roots(session, opts), fn root ->
+        case Enum.find(run_dir_candidates(root, run_id), fn dir ->
+               RemoteFiles.exists?(session, dir, opts)
+             end) do
+          nil -> nil
+          _dir -> root
+        end
+      end)
+
+    case root do
+      nil ->
+        nil
+
+      root ->
+        IO.puts("[collect] Found run #{run_id} on cluster under #{root}")
+        minimal_run(run_id, root, safe_cluster(session, opts))
+    end
+  end
+
+  @doc """
+  Returns a minimal `%Run{}` for the newest run directory found on the remote
+  cluster (current `run_results/` layout first, then legacy layout), or `nil`.
+  """
+  @spec latest_remote_run(HpcConnect.Session.t(), keyword()) :: Run.t() | nil
+  def latest_remote_run(%HpcConnect.Session{} = session, opts \\ []) do
+    case latest_run_dir(session, candidate_roots(session, opts), opts) do
+      nil ->
+        nil
+
+      {root, dir} ->
+        run_id = dir |> String.trim_trailing("/") |> Path.basename()
+        IO.puts("[collect] Found newest cluster run #{run_id} (#{dir})")
+        minimal_run(run_id, root, safe_cluster(session, opts))
+    end
+  end
+
+  defp minimal_run(run_id, remote_root, cluster) do
+    Run.new(
+      id: run_id,
+      cluster: cluster,
+      remote_root: remote_root,
+      problems: [],
+      provers: []
+    )
+  end
+
+  # Roots where runs may live: the config-resolved remote root, plus the
+  # session work/vault-derived roots (the vault env var may be unset remotely).
+  defp candidate_roots(session, opts) do
+    config_root = safe_remote_root(session, opts)
+    work_root = if session.work_dir, do: posix_join(session.work_dir, "atp_benchmark_runner")
+    vault_root = if session.vault_dir, do: posix_join(session.vault_dir, "atp_benchmark_runner")
+
+    [config_root, work_root, vault_root]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  # Config.resolve needs a real HPC session (cluster struct); for fake/partial
+  # sessions (e.g. unit tests) the remote root is simply unknown.
+  defp safe_remote_root(session, opts) do
+    try do
+      Config.resolve(session, opts).remote_root
+    rescue
+      _ -> nil
+    end
+  end
+
+  defp safe_cluster(session, opts) do
+    try do
+      Config.resolve(session, opts).cluster
+    rescue
+      _ -> nil
+    end
+  end
+
+  defp run_dir_candidates(root, run_id) do
+    [posix_join(posix_join(root, "run_results"), run_id), posix_join(root, run_id)]
+  end
+
+  defp latest_run_dir(session, roots, opts) do
+    roots
+    |> Enum.flat_map(fn root ->
+      cmd =
+        "(ls -d #{Shell.quote(posix_join(root, "run_results"))}/run_* 2>/dev/null; " <>
+          "ls -d #{Shell.quote(root)}/run_* 2>/dev/null) | sort -r"
+
+      session
+      |> HpcConnect.connect!(cmd, Keyword.get(opts, :connect_opts, []))
+      |> String.split("\n", trim: true)
+      |> Enum.map(&{root, String.trim(&1)})
+    end)
+    |> Enum.reject(fn {_root, dir} -> dir == "" end)
+    |> Enum.sort_by(fn {_root, dir} -> dir end, :desc)
+    |> List.first()
   end
 
   defp collect_for_prover(session, results_dir, prover_name, problem_names, opts) do

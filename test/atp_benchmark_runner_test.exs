@@ -310,6 +310,31 @@ defmodule AtpBenchmarkRunnerTest do
     refute Map.has_key?(plan.metadata, :session)
   end
 
+  test "extended_debug: true survives the plan into metadata and session_config" do
+    session = test_session()
+
+    [problem_path | _] =
+      AtpBenchmarkRunner.install_tptp_examples!(
+        root_dir: Path.join(System.tmp_dir!(), "atp_hpc_bootstrap_debug")
+      )
+
+    plan =
+      AtpBenchmarkRunner.bootstrap(session, [:vampire], [problem_path],
+        mode: :hpc,
+        extended_debug: true
+      )
+
+    assert plan.metadata.extended_debug == true
+    assert plan.metadata.session_config.extended_debug == true
+
+    # Default is off.
+    plan_off =
+      AtpBenchmarkRunner.bootstrap(session, [:vampire], [problem_path], mode: :hpc)
+
+    assert plan_off.metadata.extended_debug == false
+    assert plan_off.metadata.session_config.extended_debug == false
+  end
+
   test "aggregates SZS results into comparison report" do
     run =
       Run.new(

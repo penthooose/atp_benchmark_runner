@@ -128,7 +128,8 @@ build issues — see [Troubleshooting](#8-troubleshooting-fauapptainer)).
    AtpBenchmarkRunner.LocalRunner.ensure_docker_image!(:<name>)
    ```
 
-7. **HPC smoke**: upload the `.def`, build the `.sif`, and validate it:
+7. **HPC smoke**: upload the `.def`, build the `.sif`, and validate it
+   (`build_on_login_node: false` chains the builds into one compute-node job):
 
    ```elixir
    AtpBenchmarkRunner.upload_prover_definitions!(session, [Prover.builtin!(:<name>)])

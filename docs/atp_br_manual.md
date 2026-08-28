@@ -223,6 +223,57 @@ session = boot.session
 in `.env`; tune `HPC_CONNECT_STEADY_TIMEOUT_SECONDS` (default `30`). See the
 hpc_connect manual for details.
 
+> **Keep steady ON.** The shipped atp `.env` sets
+> `HPC_CONNECT_STEADY_CONNECTION=true`. Without it, every benchmark sync/submit
+> step opens dozens of fresh SSH/SCP handshakes through the `csnhr` jump
+> gateway, which throttles after too many requests (`Connection refused`) and
+> stalls the run with no job created. With steady on, `connect!`/`SSH.exec`
+> multiplex over one persistent shell that self-heals: it detects a dead shell
+> (registry `Process.alive?` + port-level `ensure_port`) and transparently
+> reopens/restarts it on the next command — including across Livebook cells,
+> because the server is started unlinked and registered in an ETS keeper that
+> survives short-lived callers.
+>
+> **Problem uploads also ride the steady shell (no scp).** `TPTPSync` uploads
+> problem files and their SMT/THF conversions via `RemoteFiles.upload_file!`
+> — base64 streamed over the persistent shell (`printf %s <b64> | base64 -d`),
+> chunked for large files, CRLF→LF normalized. This was switched away from
+> `scp` because **scp cannot multiplex over the steady `bash -s` shell** — each
+> `scp` was a fresh connection that bypassed steady and re-tripped the gateway
+> rate limiter (the `transient scp error ... Connection refused` spam). With
+> the switch, a 14-problem sync makes **zero** fresh connections (verified:
+> upload ~33 ms, no throttling).
+
+**Connection retry robustness.** SSH handshakes to the gateway (`csnhr`) can
+fail transiently with `Connection refused` / `Connection timed out` — typically
+gateway throttling after many rapid requests. Two complementary mechanisms,
+both configurable in `.env`:
+
+- `HPC_CONNECT_RETRY_FOREVER=true` — never give up on transient SSH connection
+  errors; retry with exponential backoff (1 s → 2 s → 4 s → … capped at 60 s)
+  until the call succeeds. This is the per-session opt-in; it applies to the
+  steady shell, default `SSH.exec/exec!` calls, the top-level
+  `connect!`/`run_command_with_retry!` path, **and** `SSH.upload!` (SCP), which
+  now honors the same flag instead of dying after 3 fixed retries. Off by
+  default so fail-fast callers (e.g. the hpc_connect bootstrap smoke tests)
+  still give up quickly.
+- `HPC_CONNECT_STEADY_CONNECTION=true` — multiplex commands over one persistent
+  shell, which avoids the per-command handshake that triggers the throttling in
+  the first place. Combined with retry-forever this is fully self-healing.
+
+The `.env` the notebook loads is authoritative for its session: the notebook
+loads the _atp_benchmark_runner_ `.env` (via `load_env!("../.env")`), **not** the
+hpc_connect `.env`. So both flags must be set in the atp `.env` to affect a
+notebook session. `retry_forever` can also be forced per call, e.g.
+`HpcConnect.connect!(session, retry_forever: true)` or
+`HpcConnect.SSH.exec(session, cmd, retry_forever: true)`.
+
+**Validated 2026-08-28** via `mix run testing/submit_smoke.exs` (steady on,
+retry-forever on): the persistent shell establishment hit 7 transient
+`Connection refused` failures from gateway throttling and retried until it
+worked, then `sbatch` created job `794076` (PENDING in `squeue`) and `scancel`
+cleaned it up.
+
 ### 4.2 Build HPC images
 
 ```elixir
@@ -235,6 +286,11 @@ AtpBenchmarkRunner.smoke_validate_images!(session, provers)
 `build_prover_images!/3` uploads each prover's `apptainer.def` and builds the
 remote `.sif`. `force: true` (alias for `force_rebuild: true`) rebuilds even if
 the `.sif` exists, using `apptainer build --force --ignore-fakeroot-command`.
+
+By default the builds run directly on the login node
+(`build_on_login_node: true`). Set `build_on_login_node: false` to run them on
+a compute node instead — all selected images are then chained into a **single
+sbatch job** (built one after the other) rather than one job per prover.
 
 ### 4.3 Run
 
@@ -254,6 +310,11 @@ plan =
 results = AtpBenchmarkRunner.run_benchmark(plan)   # polls until done
 ```
 
+When the run starts, the runner prints the run's ID and saves the run manifest
+to the store immediately (`Run ID: <id>` / `[runner] Run <id> starting —
+manifest: <path>`). So even if the run fails before any job is submitted, the
+run_id is known and the plan is on disk.
+
 HPC execution uses SLURM array jobs; results include peak RSS (KB), so the HPC
 notebook calls `results_table(results, memory: true)`. For manual job control:
 
@@ -266,6 +327,99 @@ AtpBenchmarkRunner.cancel(session, plan)    # cancel all run jobs
 `node_size: :full` requests `--exclusive` with all node CPUs; `:half` requests
 half the node. CPU counts are auto-detected per cluster (Helma: 384/192,
 Fritz: 72/36, spr\*: 104/52).
+
+### 4.3b Execution modes and resource strategy
+
+The mode table and the ready-to-paste plan variants for each combination:
+
+| Mode                             | `hpc_mode`     | `single_node_mode` | Resource allocation                                                  |
+| -------------------------------- | -------------- | ------------------ | -------------------------------------------------------------------- |
+| Single-node sequential (default) | `:single_node` | `:sequential`      | All provers share 1 node. Tasks one at a time; each gets node CPUs.  |
+| Single-node parallel             | `:single_node` | `:parallel`        | All provers share 1 node. Tasks run concurrently (≤ `max_parallel`). |
+| Multi-node (prover per node)     | `:multi_node`  | —                  | Each prover gets its own node.                                       |
+
+`node_size` controls CPU allocation (`--exclusive` for `:full`, half the node
+for `:half`).
+
+```elixir
+# Single-node sequential, half node
+plan_half =
+	AtpBenchmarkRunner.bootstrap(session, provers, problems,
+		mode: :hpc,
+		hpc_mode: :single_node,
+		single_node_mode: :sequential,
+		node_size: :half,
+		timeout_seconds: 60,
+		wait_for_completion: false,
+		prepare_images: false
+	)
+
+# Single-node parallel, full node (≤ max_parallel_jobs concurrent tasks)
+plan_parallel =
+	AtpBenchmarkRunner.bootstrap(session, provers, problems,
+		mode: :hpc,
+		hpc_mode: :single_node,
+		single_node_mode: :parallel,
+		max_parallel_jobs: 4,
+		timeout_seconds: 60,
+		wait_for_completion: false,
+		prepare_images: false
+	)
+
+# Multi-node: each prover gets its own node (default full)
+plan_multi =
+	AtpBenchmarkRunner.bootstrap(session, provers, problems,
+		mode: :hpc,
+		hpc_mode: :multi_node,
+		timeout_seconds: 60,
+		wait_for_completion: false,
+		prepare_images: false
+	)
+```
+
+### 4.4 Resume: fetch results without re-running
+
+The run manifest (`*.run.json`) is persisted in the store **the moment the run
+starts** — and the run_id is printed as part of the start banner — so the last
+run is always identifiable and recoverable even if the notebook cell crashes,
+or the SSH connection dies while fetching.
+
+- **Collection never gives up.** Result fetching (`Results.collect`) runs with
+  `collect_retry_forever: true`: on transient SSH failures (`Connection
+refused` / `closed` / `timed out`, scp status 255) or while result files are
+  still missing, it retries with exponential backoff (10 s → 60 s cap) **until
+  the results arrive** instead of failing the run.
+- **Resume a specific run** — by run id (the id printed at run start) or a
+  `%Run{}` plan / manifest:
+
+```elixir
+results = AtpBenchmarkRunner.collect_hpc_results!(session, "run_20260827_155553_1028")
+
+# equivalent:
+run = AtpBenchmarkRunner.Store.load_run_by_id!("run_20260827_155553_1028")
+AtpBenchmarkRunner.collect_hpc_results!(session, run)
+```
+
+- **Fetch only the last run's results** — no re-submission, no re-sync:
+
+```elixir
+results = AtpBenchmarkRunner.collect_last_hpc_results!(session)
+```
+
+`collect_last_hpc_results!/2` loads the newest `*.run.json` that was actually
+**submitted** (has SLURM job ids) and collects it (persisting the results).
+Manifests persisted at run start but that never reached `sbatch` (e.g. SSH
+refused during problem sync) are skipped with a clear error.
+
+**Remote-cluster fallback:** if a run id is not in the local store (or no
+submitted local manifest exists), both resume functions look the run up on the
+cluster — under `<remote_root>/run_results/<run_id>` (current layout) or
+`<remote_root>/<run_id>` (legacy) — and fetch the results directly. So HPC runs
+that were never persisted locally (submitted before manifest persistence, or
+after a store wipe) are still resumable by run id. Runs fetched this way use
+finite retries (they are already finished). `ArgumentError` is raised only when
+the run exists neither locally nor on the cluster (e.g. it never reached
+`sbatch`).
 
 ---
 
@@ -281,6 +435,7 @@ Fritz: 72/36, spr\*: 104/52).
 | `ATP_BENCHMARK_RUNNER_BUNDLED_EXAMPLES_DIR` | `./tmp/tptp_examples`                 | bundled TPTP examples copy                                                   |
 | `HPC_CONNECT_STEADY_CONNECTION`             | —                                     | HPC: persistent steady SSH shell (via hpc_connect)                           |
 | `HPC_CONNECT_STEADY_TIMEOUT_SECONDS`        | `30`                                  | HPC: per-command ssh connect timeout                                         |
+| `HPC_CONNECT_RETRY_FOREVER`                 | `false`                               | HPC: retry transient SSH connection errors forever (backoff up to 60 s)      |
 
 `setup_local/1` and `load_env!/1` cover the common cases; the table above shows
 the raw overrides.
@@ -305,12 +460,14 @@ caught at load time, not silently ignored.
 
 ## 7. Troubleshooting
 
-| Symptom                                                                          | Cause / fix                                                                                                                     |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `build_local_images!` returns `{:error, name, "executable apptainer not found"}` | Apptainer is not installed on PATH; use `backend: :docker` or install Apptainer                                                 |
-| Docker build fails even though the image exists                                  | Docker not running, or a stale image — use `force: true` (adds `--no-cache`)                                                    |
-| Local run ignores my freshly built image                                         | Local execution prefers an existing SIF, then Docker, then native; build with the matching backend                              |
-| HPC build fails on an existing `.sif`                                            | `build_prover_images!(..., force: true)` (remote `--force --ignore-fakeroot-command`)                                           |
-| New prover not discovered                                                        | `prover.exs` missing/malformed, or the `priv` dir was not copied after adding it — run `Provers.validate()` and check the guide |
-| TPTP-to-SMT/THF conversion errors                                                | Check `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` / `..._SMT_THF_DIR` are writable; the parser is selected per prover via `prover.exs`   |
-| HPC commands are slow / handshake per command                                    | Enable the steady SSH connection (see §4.1)                                                                                     |
+| Symptom                                                                           | Cause / fix                                                                                                                                                             |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `build_local_images!` returns `{:error, name, "executable apptainer not found"}`  | Apptainer is not installed on PATH; use `backend: :docker` or install Apptainer                                                                                         |
+| Docker build fails even though the image exists                                   | Docker not running, or a stale image — use `force: true` (adds `--no-cache`)                                                                                            |
+| Local run ignores my freshly built image                                          | Local execution prefers an existing SIF, then Docker, then native; build with the matching backend                                                                      |
+| HPC build fails on an existing `.sif`                                             | `build_prover_images!(..., force: true)` (remote `--force --ignore-fakeroot-command`)                                                                                   |
+| New prover not discovered                                                         | `prover.exs` missing/malformed, or the `priv` dir was not copied after adding it — run `Provers.validate()` and check the guide                                         |
+| TPTP-to-SMT/THF conversion errors                                                 | Check `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` / `..._SMT_THF_DIR` are writable; the parser is selected per prover via `prover.exs`                                           |
+| HPC commands are slow / handshake per command                                     | Enable the steady SSH connection (see §4.1)                                                                                                                             |
+| `Connection refused` / `Connection timed out` during connect or exec              | Gateway throttling after too many SSH requests. Set `HPC_CONNECT_RETRY_FOREVER=true` in the atp `.env` (authoritative for the notebook) and/or enable steady (see §4.1) |
+| `Benchmark failed: scp failed (status 255) ... Connection refused` while fetching | Transient SSH drop during result fetch; collection now retries until success. If the run failed anyway, resume with `collect_last_hpc_results!(session)` (see §4.4)     |

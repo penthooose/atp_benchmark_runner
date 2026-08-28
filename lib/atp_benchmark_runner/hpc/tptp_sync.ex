@@ -38,8 +38,13 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
   @doc """
   Uploads selected local problem files and returns problems with remote paths.
 
-  Batches the remote existence check into a single `find` command instead of
-  one SSH call per file — avoids rate-limiting the SSH gateway.
+  All uploads (originals + SMT/THF conversions) are collected and flushed in a
+  minimal number of batched SSH commands (`RemoteFiles.upload_files!/3`) instead
+  of one fresh SSH/SCP connection per file — the csnhr jump gateway throttles
+  after too many requests in a short window, which previously stalled the sync
+  and could take the whole Livebook runtime down with it.
+
+  The remote existence check is batched into a single `find` command.
   """
   @spec sync_problem_set!(HpcConnect.Session.t(), [Problem.t()], keyword()) :: [Problem.t()]
   def sync_problem_set!(%HpcConnect.Session{} = session, problems, opts \\ [])
@@ -50,9 +55,23 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
     # One SSH call to discover all already-synced remote files
     existing = existing_remote_paths(session, root)
 
-    Enum.map(problems, &sync_problem!(session, &1, root, existing, opts))
+    entries = Enum.map(problems, &sync_plan(&1, root, existing))
+
+    uploads = Enum.flat_map(entries, & &1.uploads)
+
+    # All files ride a handful of SSH commands (batch base64), so a 14-problem
+    # sync makes ~3 SSH calls instead of ~56.
+    if uploads != [] do
+      RemoteFiles.upload_files!(session, uploads,
+        extended_debug: Keyword.get(opts, :extended_debug, false)
+      )
+    end
+
+    Enum.map(entries, & &1.problem)
   end
 
+  # One SSH call to discover all already-synced remote files (originals + .smt2
+  # + _thf.p, which matches the `*.p`/`*.smt2` patterns below).
   defp existing_remote_paths(%HpcConnect.Session{} = session, root) do
     command =
       "if [ -d #{Shell.quote(root)} ]; then find #{Shell.quote(root)} -type f -name '*.p' -o -name '*.ax' -o -name '*.smt2' 2>/dev/null; fi"
@@ -86,81 +105,61 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
     |> Map.put(:remote_tptp_dir, root)
   end
 
-  defp sync_problem!(session, %Problem{} = problem, root, existing, opts) do
+  defp sync_plan(%Problem{} = problem, root, existing) do
     cond do
       local_file?(problem) ->
         remote_path = remote_problem_path(problem, root)
 
-        unless MapSet.member?(existing, remote_path) do
-          RemoteFiles.mkdir_p!(session, posix_dirname(remote_path), opts)
+        uploads =
+          original_uploads(problem, remote_path, existing) ++
+            converted_uploads(problem.path, remote_path)
 
-          # Upload the original problem file
-          HpcConnect.SSH.upload!(session, problem.path, remote_path,
-            normalize_line_endings: :lf,
-            normalize_extensions: [".p", ".ax"]
-          )
-        end
-
-        # Converted versions needed by specific provers (CVC5 → .smt2, Lash →
-        # _thf.p) are regenerated fresh by the runner before each sync, so they
-        # are ALWAYS uploaded — a remote copy from an older converter run must
-        # be replaced, not skipped (a stale .smt2 previously made cvc5 fail
-        # with parse errors and masked correct results).
-        upload_converted!(session, problem.path, remote_path, ".smt2", opts)
-        upload_thf_converted!(session, problem.path, remote_path, opts)
-
-        mark_synced(problem, remote_path)
+        %{problem: mark_synced(problem, remote_path), uploads: uploads}
 
       already_remote?(problem) ->
-        problem
+        %{problem: problem, uploads: []}
 
       true ->
-        problem
+        %{problem: problem, uploads: []}
     end
   end
 
-  # Upload a .smt2 conversion if it exists (always — see sync_problem!).
-  defp upload_converted!(session, local_path, remote_path, ext, opts) do
-    converted =
-      local_path
-      |> String.replace_suffix(".p", ext)
-      |> String.replace_suffix(".tptp", ext)
-
-    if File.exists?(converted) do
-      remote_converted =
-        remote_path
-        |> String.replace_suffix(".p", ext)
-        |> String.replace_suffix(".tptp", ext)
-
-      RemoteFiles.mkdir_p!(session, posix_dirname(remote_converted), opts)
-
-      HpcConnect.SSH.upload!(session, converted, remote_converted,
-        normalize_line_endings: :lf,
-        normalize_extensions: [ext]
-      )
+  # The original problem file is only re-uploaded when it is not already remote
+  # (unchanged copies are reused). Converted files (.smt2 / _thf.p) are
+  # regenerated fresh by the runner before each sync, so they are ALWAYS
+  # re-uploaded — a stale remote conversion previously produced wrong results.
+  # Because every upload rides the same batched call, always re-uploading
+  # conversions costs no extra connections.
+  defp original_uploads(%Problem{path: path}, remote_path, existing) do
+    if MapSet.member?(existing, remote_path) do
+      []
+    else
+      [{path, remote_path}]
     end
   end
 
-  # Upload a _thf.p converted file if it exists (always — see sync_problem!).
-  defp upload_thf_converted!(session, local_path, remote_path, opts) do
-    thf_local =
-      local_path
-      |> String.replace_suffix(".p", "_thf.p")
-      |> String.replace_suffix(".tptp", "_thf.p")
+  defp converted_uploads(local_path, remote_path) do
+    smt2_upload =
+      if File.exists?(conversion_path(local_path, ".smt2")) do
+        [{conversion_path(local_path, ".smt2"), conversion_path(remote_path, ".smt2")}]
+      else
+        []
+      end
 
-    if File.exists?(thf_local) do
-      thf_remote =
-        remote_path
-        |> String.replace_suffix(".p", "_thf.p")
-        |> String.replace_suffix(".tptp", "_thf.p")
+    thf_upload =
+      if File.exists?(conversion_path(local_path, "_thf.p")) do
+        [{conversion_path(local_path, "_thf.p"), conversion_path(remote_path, "_thf.p")}]
+      else
+        []
+      end
 
-      RemoteFiles.mkdir_p!(session, posix_dirname(thf_remote), opts)
+    smt2_upload ++ thf_upload
+  end
 
-      HpcConnect.SSH.upload!(session, thf_local, thf_remote,
-        normalize_line_endings: :lf,
-        normalize_extensions: [".p"]
-      )
-    end
+  defp conversion_path(path, suffix) do
+    path
+    |> String.replace_suffix(".p", suffix)
+    |> String.replace_suffix(".tptp", suffix)
   end
 
   defp plan_entry(%Problem{} = problem, root) do
@@ -229,18 +228,6 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
     case Integer.parse(String.trim(value)) do
       {int, ""} -> int
       _ -> String.trim(value)
-    end
-  end
-
-  defp posix_dirname(path) do
-    normalized = String.replace(path, "\\", "/")
-
-    normalized
-    |> String.split("/", trim: true)
-    |> Enum.drop(-1)
-    |> case do
-      [] -> if String.starts_with?(normalized, "/"), do: "/", else: "."
-      parts -> posix_join(if String.starts_with?(normalized, "/"), do: ["/" | parts], else: parts)
     end
   end
 

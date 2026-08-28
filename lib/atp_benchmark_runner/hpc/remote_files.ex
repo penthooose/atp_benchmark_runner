@@ -14,6 +14,12 @@ defmodule AtpBenchmarkRunner.HPC.RemoteFiles do
   # keeping the number of round-trips small.
   @max_base64_per_call 16_000
 
+  # Upper bound for a batched multi-file write command line (the joined
+  # `&&`-chain of per-file write steps). Stays safely below the Windows
+  # process-spawn limit of ~32 767 chars while grouping several small files
+  # into one SSH call.
+  @max_batch_command_size 28_000
+
   @doc """
   Lists remote files below `remote_dir` matching a shell `find -name` pattern.
   """
@@ -74,19 +80,151 @@ defmodule AtpBenchmarkRunner.HPC.RemoteFiles do
     mode = Keyword.get(opts, :mode, "644")
     b64 = content |> String.replace("\r", "") |> Base.encode64()
 
-    if byte_size(b64) <= @max_base64_per_call do
-      # Small payload – single call, matches previous behaviour.
-      HpcConnect.connect!(
-        session,
-        JobScript.write_file_command(remote_path, content, mode: mode),
-        connect_opts(opts)
-      )
-    else
-      b64
-      |> chunk_write_commands(remote_path, mode)
-      |> Enum.each(fn cmd -> HpcConnect.connect!(session, cmd, connect_opts(opts)) end)
+    cond do
+      byte_size(b64) <= @max_base64_per_call ->
+        # Small payload – single call, matches previous behaviour.
+        HpcConnect.connect!(
+          session,
+          JobScript.write_file_command(remote_path, content, mode: mode),
+          connect_opts(opts)
+        )
 
-      :ok
+      Keyword.get(opts, :single_command, false) ->
+        # Steady-shell only: deliver the whole payload as ONE command via stdin.
+        # The steady shell has no Windows process-spawn limit (no fresh ssh.exe
+        # per chunk), so several rapid writes collapse into a single call. Only
+        # safe over the steady shell; a joined command this large would exceed
+        # the ~32 767 char limit as an ssh argument in non-steady mode.
+        cmd =
+          b64
+          |> chunk_write_commands(remote_path, mode)
+          |> Enum.join(" && ")
+
+        HpcConnect.connect!(session, cmd, connect_opts(opts))
+        :ok
+
+      true ->
+        b64
+        |> chunk_write_commands(remote_path, mode)
+        |> Enum.each(fn cmd -> HpcConnect.connect!(session, cmd, connect_opts(opts)) end)
+
+        :ok
+    end
+  end
+
+  @doc """
+  Uploads a local text file to `remote_path` by streaming it as base64 over the
+  SSH session (routed through the steady shell when enabled) — **no `scp`**, so
+  uploads never open a fresh per-file connection that can trip the gateway rate
+  limiter. CRLF is normalized to LF and large files are chunked into several
+  small SSH calls.
+
+  Used for TPTP problem files and their SMT/THF conversions in the benchmark
+  sync (`TPTPSync`).
+  """
+  @spec upload_file!(HpcConnect.Session.t(), binary(), binary(), keyword()) :: :ok
+  def upload_file!(%HpcConnect.Session{} = session, local_path, remote_path, opts \\ []) do
+    mode = Keyword.get(opts, :mode, "644")
+    content = local_path |> File.read!() |> String.replace("\r", "")
+    _ = write_text!(session, remote_path, content, mode: mode)
+    :ok
+  end
+
+  @doc """
+  Uploads many local files to their remote paths in a minimal number of SSH
+  commands (batched base64, routed through the steady shell when enabled).
+
+  `files` is a list of `{local_path, remote_path}`. All writes are grouped into
+  a handful of `connect!` calls instead of one per file — the benchmark sync
+  phase is the main source of the SSH-call burst that trips the csnhr gateway
+  rate limiter (dozens of fresh connections in a short window → `Connection
+  refused` for the whole user). CRLF is normalized to LF per file.
+  """
+  @spec upload_files!(HpcConnect.Session.t(), [{binary(), binary()}], keyword()) :: :ok
+  def upload_files!(%HpcConnect.Session{} = session, files, opts \\ []) do
+    mode = Keyword.get(opts, :mode, "644")
+
+    if Keyword.get(opts, :extended_debug, false) do
+      Enum.each(files, fn {local_path, remote_path} ->
+        size = if File.exists?(local_path), do: File.stat!(local_path).size, else: :missing
+
+        IO.puts(
+          "[hpc-ext-debug] upload: #{Path.basename(local_path)} (#{size}B) → #{remote_path}"
+        )
+      end)
+    end
+
+    remote_files =
+      Enum.map(files, fn {local_path, remote_path} ->
+        content = local_path |> File.read!() |> String.replace("\r", "")
+        {remote_path, content}
+      end)
+
+    write_files!(session, remote_files, Keyword.put(opts, :mode, mode))
+  end
+
+  @doc """
+  Writes many remote text files in a minimal number of SSH commands.
+
+  Each `{remote_path, content}` pair is rendered as complete per-file write
+  steps (mkdir -p + base64 write + optional chmod) via `chunk_write_commands/3`,
+  then consecutive steps are grouped into single command lines that stay below
+  the OS process-spawn limit. Returns `:ok`.
+
+  The `:connect_fun` opt (default `&HpcConnect.connect!/3`) lets callers inject
+  a fake executor for offline tests.
+  """
+  @spec write_files!(HpcConnect.Session.t(), [{binary(), binary()}], keyword()) :: :ok
+  def write_files!(%HpcConnect.Session{} = session, files, opts \\ []) do
+    connect_fun = Keyword.get(opts, :connect_fun, &HpcConnect.connect!/3)
+    copts = connect_opts(opts)
+
+    files
+    |> multi_write_commands(opts)
+    |> Enum.each(fn cmd -> connect_fun.(session, cmd, copts) end)
+
+    :ok
+  end
+
+  @doc """
+  Pure builder of batched multi-file write commands (exposed for tests).
+
+  `files` is a list of `{remote_path, content}`. Returns shell command strings,
+  each of which performs one or more complete per-file writes (`mkdir -p` +
+  base64 write + optional chmod) chained with `&&`, cut so no command line
+  exceeds `@max_batch_command_size` bytes. This turns N per-file SSH calls into
+  a handful of calls.
+  """
+  @spec multi_write_commands([{binary(), binary()}], keyword()) :: [binary()]
+  def multi_write_commands(files, opts \\ []) do
+    mode = Keyword.get(opts, :mode, "644")
+
+    files
+    |> Enum.flat_map(fn {remote_path, content} ->
+      b64 = content |> String.replace("\r", "") |> Base.encode64()
+      chunk_write_commands(b64, remote_path, mode)
+    end)
+    |> batch_steps(@max_batch_command_size)
+    |> Enum.map(&Enum.join(&1, " && "))
+  end
+
+  # Greedy grouping of complete write steps so the joined command stays under
+  # the byte budget (keeps each ssh command line below the Windows spawn limit
+  # of ~32 767 chars). A single oversized step (large file) gets its own batch.
+  defp batch_steps(steps, budget) do
+    steps
+    |> Enum.reduce({[], [], 0}, fn step, {batches, current, size} ->
+      step_size = byte_size(step) + 4
+
+      if current != [] and size + step_size > budget do
+        {[Enum.reverse(current) | batches], [step], step_size}
+      else
+        {batches, [step | current], size + step_size}
+      end
+    end)
+    |> case do
+      {batches, [], _} -> Enum.reverse(batches)
+      {batches, current, _} -> Enum.reverse([Enum.reverse(current) | batches])
     end
   end
 
@@ -125,7 +263,7 @@ defmodule AtpBenchmarkRunner.HPC.RemoteFiles do
   defp chunk_base64(b64, size) when byte_size(b64) <= size, do: [b64]
 
   defp chunk_base64(b64, size) do
-    <<head::binary-size(size), rest::binary>> = b64
+    <<head::binary-size(^size), rest::binary>> = b64
     [head | chunk_base64(rest, size)]
   end
 

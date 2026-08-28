@@ -374,26 +374,23 @@ defmodule AtpBenchmarkRunner.TPTP do
 
   defp resolve_in_tptp_root(pattern, opts) do
     root = opts |> root_opts() |> Keyword.fetch!(:root_dir) |> Index.library_root()
+    basename = Path.basename(pattern)
+    index = file_index(root)
 
-    if root do
-      basename = Path.basename(pattern)
-      index = file_index(root)
+    # Fast path: lookup from pre-built index
+    case Map.fetch(index, basename) do
+      {:ok, path} ->
+        path
 
-      # Fast path: lookup from pre-built index
-      case Map.fetch(index, basename) do
-        {:ok, path} ->
-          path
+      :error ->
+        # Fallback: explicit pattern (for paths with subdirectory prefix)
+        candidate =
+          root
+          |> Path.join(pattern)
+          |> Path.wildcard()
+          |> List.first()
 
-        :error ->
-          # Fallback: explicit pattern (for paths with subdirectory prefix)
-          candidate =
-            root
-            |> Path.join(pattern)
-            |> Path.wildcard()
-            |> List.first()
-
-          if candidate && File.exists?(candidate), do: candidate
-      end
+        if candidate && File.exists?(candidate), do: candidate
     end
   end
 

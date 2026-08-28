@@ -230,20 +230,50 @@ defmodule AtpBenchmarkRunner.HPC.Images do
     maybe_install_build_tools!(session, opts)
     build_opts = Keyword.put(opts, :install_scripts, false)
 
-    Map.new(provers, fn prover ->
-      {prover.name,
-       try do
-         build!(session, prover, build_opts)
-       rescue
-         e ->
-           IO.puts(
-             "[WARN] Build failed for prover #{prover.name}: #{Exception.message(e)}" <>
-               "\n       Continuing with remaining provers..."
-           )
+    if Keyword.get(opts, :build_on_login_node, true) do
+      # Per-prover build on the login node (default), or one job per prover if
+      # a compute node is forced per prover.
+      Map.new(provers, fn prover ->
+        {prover.name,
+         try do
+           build!(session, prover, build_opts)
+         rescue
+           e ->
+             IO.puts(
+               "[WARN] Build failed for prover #{prover.name}: #{Exception.message(e)}" <>
+                 "\n       Continuing with remaining provers..."
+             )
 
-           {:error, Exception.message(e)}
-       end}
-    end)
+             {:error, Exception.message(e)}
+         end}
+      end)
+    else
+      # Compute-node mode: chain every build into ONE sbatch job so the images
+      # are built back-to-back on the same node instead of one job per prover.
+      specs =
+        Enum.map(provers, fn prover ->
+          %{
+            name: remote_image_name(prover),
+            force_rebuild: Keyword.get(opts, :force_rebuild, false),
+            local_def_path: local_def_path(prover)
+          }
+        end)
+
+      try do
+        %{sifs: sifs} = HpcConnect.build_sif_batch_blocking(session, specs, build_opts)
+
+        Map.new(provers, fn prover ->
+          {prover.name, Map.get(sifs, remote_image_name(prover))}
+        end)
+      rescue
+        e ->
+          IO.puts("[WARN] Batch image build failed: #{Exception.message(e)}")
+
+          Map.new(provers, fn prover ->
+            {prover.name, {:error, Exception.message(e)}}
+          end)
+      end
+    end
   end
 
   @doc """
@@ -277,6 +307,7 @@ defmodule AtpBenchmarkRunner.HPC.Images do
       remote_def_path: remote_def_path(session, prover),
       remote_sif_path: remote_sif_path(session, prover),
       build_cluster: Keyword.get(opts, :build_cluster, :hpc_connect_default_fallbacks),
+      build_on_login_node: Keyword.get(opts, :build_on_login_node, true),
       use_slurm: Keyword.get(opts, :use_slurm, false),
       source_url: container.source_url,
       notes: container.notes
@@ -293,6 +324,7 @@ defmodule AtpBenchmarkRunner.HPC.Images do
     ]
     |> maybe_put(:build_cluster, Keyword.fetch(opts, :build_cluster))
     |> maybe_put(:use_slurm, Keyword.fetch(opts, :use_slurm))
+    |> maybe_put(:build_on_login_node, Keyword.fetch(opts, :build_on_login_node))
     |> maybe_put(:partition, Keyword.fetch(opts, :partition))
     |> maybe_put(:walltime, Keyword.fetch(opts, :walltime))
     |> maybe_put(:cpus, Keyword.fetch(opts, :cpus))

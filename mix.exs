@@ -25,7 +25,7 @@ defmodule AtpBenchmarkRunner.MixProject do
       # {:hpc_connect, github: "<aise-org-or-user>/hpc_connect", tag: "v0.1.0"}
       {:hpc_connect, path: "../../item_15_Elixir_HPC_Connect_Library/hpc_connect"},
       {:jason, "~> 1.4"},
-      {:kino, "~> 0.13"},
+      {:kino, "~> 0.19"},
       {:req, "~> 0.5"},
       {:oban, "~> 2.19", optional: true}
     ]

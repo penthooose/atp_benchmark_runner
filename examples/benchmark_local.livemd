@@ -2,7 +2,7 @@
 
 ```elixir
 Mix.install([
-  {:atp_benchmark_runner, path: "item_14_ATP_Benchmark_Runner/atp_benchmark_runner", force: true}
+  {:atp_benchmark_runner, github: "penthooose/atp_benchmark_runner", force: true}
 ])
 ```
 
@@ -20,18 +20,15 @@ IO.puts("  THF temp dir:   #{AtpBenchmarkRunner.Config.thf_tmp_dir()}")
 ```
 
 This notebook is the local counterpart to `benchmark_hpc.livemd`. It runs the
-same prover images (via Docker instead of Apptainer) and applies the **same
-input preparation** as on the cluster:
+same prover images (via Docker or Apptainer) and applies the same
+input preparation as on the cluster:
 
-- **`:cvc5`** — problems are converted to SMT-LIB (`TPTPToSMT`) before cvc5 sees
+* **`:cvc5`** — problems are converted to SMT-LIB (`TPTPToSMT`) before cvc5 sees
   them (cvc5 has no TPTP input dialect); its bare `sat`/`unsat`/`unknown` answer
   is mapped to an SZS status.
-- **`:lash`** — FOF/CNF/TFF problems are converted to THF (`TPTP.ToTHF`) because
+* **`:lash`** — FOF/CNF/TFF problems are converted to THF (`TPTP.ToTHF`) because
   lash is a THF-`$o`-only prover.
-- All other provers read the TPTP file directly.
-
-No HPC session, SLURM, or execution plans are needed here — everything runs on
-this machine, sequentially.
+* All other provers read the TPTP file directly.
 
 ---
 
@@ -42,10 +39,10 @@ AtpBenchmarkRunner.LocalRunner.print_image_status_summary()
 ```
 
 > **Available provers:**
->
-> - **`:tableaux`** — uses the local escript (always available after `mix escript.build` in item #12)
-> - **`:eprover`**, **`:vampire`**, **`:cvc5`**, **`:zipperposition`**, **`:leo3`**, **`:leo2`**, **`:lash`** — run via Docker images built from their `Containerfile`s
->
+> 
+> * **`:tableaux`** — uses the local escript (always available after `mix escript.build` in item #12)
+> * **`:eprover`**, **`:vampire`**, **`:cvc5`**, **`:zipperposition`**, **`:leo3`**, **`:leo2`**, **`:lash`** — run via Docker images built from their `Containerfile`s
+> 
 > Native binaries of the reference provers are not distributed for Windows. The
 > Docker images are built from the same sources as the HPC Apptainer `.def`s, so
 > results are directly comparable with the cluster.
@@ -290,62 +287,7 @@ end
 
 Mermaid-based visual companions to `explain/1` / `explain_full/1`. Each cell
 returns a `Kino.Mermaid` diagram (or a fenced markdown block outside
-Livebook). If the real run has not produced results yet — or the kernel was
-restarted — the cells fall back to synthetic sample results so you can see the
-look of every diagram without needing the Docker images.
-
-### Synthetic sample results (fallback when section 6 has not run)
-
-```elixir
-defmodule VisualizeSample do
-  def results do
-    refutation = """
-    % SZS output start CNFRefutation
-    fof(unit_not_a, axiom, ~(a), file('GRP001-0.p', unit_not_a)).
-    fof(unit_a, axiom, a, file('GRP001-0.p', unit_a)).
-    fof(c_0_2, plain, ~a, inference(fof_simplification,[status(thm)],[unit_not_a])).
-    cnf(c_0_4, plain, (~a), inference(split_conjunct,[status(thm)],[c_0_2])).
-    cnf(c_0_5, plain, (a), inference(split_conjunct,[status(thm)],[unit_a])).
-    cnf(c_0_6, plain, ($false), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_4, c_0_5])]), ['proof']).
-    % SZS output end CNFRefutation
-    """
-
-    [
-      AtpBenchmarkRunner.Result.new(
-        problem_id: "GRP001-0",
-        prover: :eprover,
-        szs_status: "Theorem",
-        wall_time_ms: 812,
-        memory_kb: 12_345,
-        raw_output: refutation
-      ),
-      AtpBenchmarkRunner.Result.new(
-        problem_id: "GRP002+0",
-        prover: :eprover,
-        szs_status: "GaveUp",
-        wall_time_ms: 30_000,
-        memory_kb: 8_100
-      ),
-      AtpBenchmarkRunner.Result.new(
-        problem_id: "GRP001-0",
-        prover: :vampire,
-        szs_status: "Theorem",
-        wall_time_ms: 402,
-        memory_kb: 9_900
-      ),
-      AtpBenchmarkRunner.Result.new(
-        problem_id: "SMT001+0",
-        prover: :cvc5,
-        szs_status: "Satisfiable",
-        wall_time_ms: 604,
-        memory_kb: 4_200
-      )
-    ]
-  end
-end
-```
-
-### 9a. Single result — `AtpBenchmarkRunner.visualize(result)`
+Livebook).
 
 ```elixir
 results = binding()[:results] || []
@@ -359,7 +301,7 @@ target =
 if target, do: AtpBenchmarkRunner.visualize(target), else: "No solved eprover result found."
 ```
 
-### 9b. Proof dependency graph — `AtpBenchmarkRunner.visualize_proof(result)`
+### 9b. Proof dependency graph
 
 For provers that emit machine-readable TPTP clause refutations (E, Vampire)
 this renders the proof as a dependency DAG. Other provers fall back to a
@@ -377,7 +319,7 @@ target =
 if target, do: AtpBenchmarkRunner.visualize_proof(target), else: "No parseable proof found."
 ```
 
-### 9c. Run summary — status pie + wall-time chart
+### 9c. Run summary (status + wall-time chart)
 
 `AtpBenchmarkRunner.visualize(results)` is the one-call shortcut for
 `Visualize.status_pie/2` + `Visualize.timeline/2`; it pushes both diagrams as
@@ -393,7 +335,7 @@ case AtpBenchmarkRunner.visualize(results) do
 end
 ```
 
-### 9d. Report scoreboard — `AtpBenchmarkRunner.visualize(report)`
+### 9d. Report scoreboard
 
 ```elixir
 results = binding()[:results] || []
@@ -463,18 +405,12 @@ end
 
 ## 12. Cross-run comparison & statistics
 
-Compares **all** stored runs at once. Results stay in JSON files under the
-store dir (no database yet — columns may still change during development).
-Each (problem, prover) is aggregated across every run, producing:
-
-- a per-problem × prover **best-time heatmap** (min time per prover; fastest solver green → slowest red, rainbow in between; unsolved gray),
-
-* a per-problem × prover **time-range matrix** (min–max ms across runs),
-* a **prover ranking** by solved problems.
+Compares all stored runs at once. Results stay in JSON files under the
+store dir.
 
 Ranking counts `Timeout`/`GaveUp` as real attempts (never excluded). By default
 `InputError`/`TypeError`/`UnsupportedLogic`/`Error` are treated as non-attempts
-(prover not applicable to that problem) — override with `:exclude_statuses`
+(prover not applicable to that problem); override with `:exclude_statuses`
 (pass `[]` to include them).
 
 ```elixir

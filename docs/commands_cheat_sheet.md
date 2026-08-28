@@ -17,6 +17,12 @@ AtpBenchmarkRunner.setup_local(tmp_root: Path.expand("./tmp", __DIR__))
 AtpBenchmarkRunner.load_env!("../.env")       # HPC + runner env vars
 ```
 
+```elixir
+boot = HpcConnect.bootstrap(mode: :local, cluster: :helma, env_file: "../.env",
+                            steady_connection: true)
+session = boot.session
+```
+
 ---
 
 ## Prover registry
@@ -56,6 +62,8 @@ Returns `[{:ok, name} | {:error, name, reason}, ...]`.
 AtpBenchmarkRunner.upload_prover_definitions!(session, AtpBenchmarkRunner.Provers.all())
 AtpBenchmarkRunner.build_prover_images!(session, AtpBenchmarkRunner.Provers.all())
 AtpBenchmarkRunner.build_prover_images!(session, provers, force: true)  # remote --force rebuild
+AtpBenchmarkRunner.build_prover_images!(session, provers,
+  force: true, build_on_login_node: false)  # chained compute-node builds in one sbatch job
 AtpBenchmarkRunner.smoke_validate_images!(session, provers)             # smoke-test the SIFs
 ```
 
@@ -108,6 +116,56 @@ AtpBenchmarkRunner.monitor(session, plan)          # poll progress manually
 AtpBenchmarkRunner.status(session, plan)           # SLURM job rows
 AtpBenchmarkRunner.cancel(session, plan)           # cancel all run jobs
 ```
+
+Other execution modes (same call shape, different mode flags):
+
+```elixir
+# Single-node sequential, half node
+plan_half =
+	AtpBenchmarkRunner.bootstrap(session, provers, problems,
+		mode: :hpc, hpc_mode: :single_node, single_node_mode: :sequential,
+		node_size: :half, timeout_seconds: 60
+	)
+
+# Single-node parallel (≤ max_parallel_jobs concurrent tasks)
+plan_parallel =
+	AtpBenchmarkRunner.bootstrap(session, provers, problems,
+		mode: :hpc, hpc_mode: :single_node, single_node_mode: :parallel,
+		max_parallel_jobs: 4, timeout_seconds: 60
+	)
+
+# Multi-node (each prover gets its own node)
+plan_multi =
+	AtpBenchmarkRunner.bootstrap(session, provers, problems,
+		mode: :hpc, hpc_mode: :multi_node, timeout_seconds: 60
+	)
+```
+
+| Mode                             | `hpc_mode`     | `single_node_mode` | Resource allocation                                                  |
+| -------------------------------- | -------------- | ------------------ | -------------------------------------------------------------------- |
+| Single-node sequential (default) | `:single_node` | `:sequential`      | All provers share 1 node. Tasks one at a time; each gets node CPUs.  |
+| Single-node parallel             | `:single_node` | `:parallel`        | All provers share 1 node. Tasks run concurrently (≤ `max_parallel`). |
+| Multi-node (prover per node)     | `:multi_node`  | —                  | Each prover gets its own node.                                       |
+
+### Resume / fetch results without re-running
+
+```elixir
+# Fetch only the most recent submitted run's results (no re-submission):
+results = AtpBenchmarkRunner.collect_last_hpc_results!(session)
+
+# Resume a specific run by run_id (the id printed at run start):
+results = AtpBenchmarkRunner.collect_hpc_results!(session, run_id)  # e.g. "run_20260827_155553_1028"
+
+# Equivalent, loading the run first:
+run = AtpBenchmarkRunner.Store.load_run_by_id!("run_20260827_155553_1028")
+results = AtpBenchmarkRunner.collect_hpc_results!(session, run)
+```
+
+If the run id is not in the local store, both calls fall back to the **remote
+cluster** (`run_results/<run_id>` results dir) and fetch from there — so HPC
+runs that were never persisted locally are still resumable. `collect_last_hpc_results!/2`
+skips plans that never reached `sbatch`; `ArgumentError` is raised only when the
+run exists neither locally nor on the cluster.
 
 ---
 

@@ -51,6 +51,46 @@ defmodule AtpBenchmarkRunner.Store do
   end
 
   @doc """
+  Loads a run manifest by run id (e.g. `"run_20260827_155553_1028"`).
+
+  Accepts either a run id — mapped to `<id>.run.json` in the store — or an
+  existing full path ending in `.run.json`. Raises an `ArgumentError` if no
+  matching manifest exists.
+
+      run = AtpBenchmarkRunner.Store.load_run_by_id!("run_20260827_155553_1028")
+  """
+  @spec load_run_by_id!(binary(), keyword()) :: Run.t()
+  def load_run_by_id!(run_id_or_path, opts \\ []) do
+    dir = Keyword.get(opts, :dir, default_dir())
+
+    case find_run_path(run_id_or_path, dir: dir) do
+      nil ->
+        raise ArgumentError,
+              "No run manifest found for #{inspect(run_id_or_path)} in #{dir}. " <>
+                "Use `Store.list_runs/1` to see available run ids."
+
+      path ->
+        load_run!(path)
+    end
+  end
+
+  @doc """
+  Returns the manifest path for a run id or an existing `.run.json` path, or `nil`.
+  """
+  @spec find_run_path(binary(), keyword()) :: binary() | nil
+  def find_run_path(run_id_or_path, opts \\ []) when is_binary(run_id_or_path) do
+    cond do
+      String.ends_with?(run_id_or_path, ".run.json") and File.exists?(run_id_or_path) ->
+        run_id_or_path
+
+      true ->
+        dir = Keyword.get(opts, :dir, default_dir())
+        path = Path.join(dir, "#{safe_name(run_id_or_path)}.run.json")
+        if File.exists?(path), do: path, else: nil
+    end
+  end
+
+  @doc """
   Saves parsed run results with reproducibility metadata.
   """
   @spec save_results!(Run.t(), [Result.t() | map()], keyword()) :: binary()
@@ -212,10 +252,39 @@ defmodule AtpBenchmarkRunner.Store do
     }
   end
 
+  @git_commit_key {__MODULE__, :git_commit}
+
+  # Runs `git rev-parse` at most once per node (cached in :persistent_term), so
+  # the hot save path never re-spawns an external process on Windows — repeated
+  # `System.cmd` spawns while a steady-shell Port is active can wedge the
+  # embedded runtime node (observed as a hard freeze right after submit).
   defp git_commit(dir) do
-    case System.cmd("git", ["rev-parse", "--short", "HEAD"], cd: dir, stderr_to_stdout: true) do
-      {commit, 0} -> String.trim(commit)
-      _ -> nil
+    case :persistent_term.get(@git_commit_key, nil) do
+      nil ->
+        commit = git_commit_once(dir)
+        if is_binary(commit), do: :persistent_term.put(@git_commit_key, commit)
+        commit
+
+      commit ->
+        commit
+    end
+  end
+
+  defp git_commit_once(dir) do
+    task =
+      Task.async(fn ->
+        case System.cmd("git", ["rev-parse", "--short", "HEAD"],
+               cd: dir,
+               stderr_to_stdout: true
+             ) do
+          {commit, 0} -> String.trim(commit)
+          _ -> nil
+        end
+      end)
+
+    case Task.yield(task, 5_000) || Task.shutdown(task) do
+      {:ok, commit} -> commit
+      nil -> nil
     end
   rescue
     _ -> nil

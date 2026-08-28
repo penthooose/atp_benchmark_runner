@@ -10,7 +10,7 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
       )
   """
 
-  alias AtpBenchmarkRunner.{Input, Problem, Prover, Run}
+  alias AtpBenchmarkRunner.{Input, Problem, Prover, Run, Store}
 
   alias AtpBenchmarkRunner.HPC.{
     Config,
@@ -69,6 +69,21 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
       |> Keyword.merge(opts)
 
     hpc = Config.resolve(session, Keyword.put(resolved_opts, :prover_count, length(run.provers)))
+
+    if session.extended_debug do
+      IO.puts(
+        "[hpc-ext-debug] #{stamp()} run #{run.id} — mode=#{hpc.hpc_mode} " <>
+          "provers=#{length(run.provers)} problems=#{length(run.problems)} partition=#{hpc.partition}"
+      )
+    end
+
+    # Persist the plan immediately so the run_id is discoverable in the store
+    # even if a later step (sync/submit) fails. If submission succeeds, the
+    # manifest is re-persisted below with :submitted status + job ids.
+    case persist_run_manifest(run) do
+      nil -> :ok
+      path -> IO.puts("[runner] Run #{run.id} starting — manifest: #{path}")
+    end
 
     remote_run =
       run
@@ -145,13 +160,15 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
 
     IO.puts("[runner] Jobs submitted — IDs: #{job_ids_str}")
 
+    persist_run_manifest(submitted_run)
     wait_for_completion!(session, submitted_run, hpc)
 
     results =
       try do
         Results.collect(session, submitted_run,
           include_raw_output: hpc.include_raw_output,
-          remote_root: hpc.remote_root
+          remote_root: hpc.remote_root,
+          collect_retry_forever: true
         )
       rescue
         e ->
@@ -179,6 +196,12 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
     run = with_default_sif_paths(run, session)
     paths = JobScript.remote_paths(run, hpc.remote_root)
 
+    if session.extended_debug do
+      IO.puts(
+        "[hpc-ext-debug] #{stamp()} submit: run_dir=#{paths.run_dir} results_dir=#{paths.results_dir}"
+      )
+    end
+
     maybe_prepare_images!(session, run, hpc)
 
     mkdir_cmd =
@@ -193,7 +216,12 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
       session,
       paths.single_node_tasks,
       JobScript.single_node_tasks(run),
-      mode: "644"
+      mode: "644",
+      # Over the steady shell, deliver the tasks file as ONE command instead of
+      # several rapid base64-chunk writes. The steady shell has no Windows
+      # process-spawn limit (it pipes via stdin), and collapsing the burst of
+      # writes into a single call avoids destabilising the Livebook runtime.
+      single_command: session.steady_connection == true
     )
 
     HpcConnect.install_remote_scripts!(session)
@@ -218,13 +246,21 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
           max_parallel: hpc.max_parallel_jobs,
           log_dir: paths.logs_dir,
           debug: hpc.debug
-        ]
+        ],
+        # The benchmark job is a short-lived batch job, not a long-running app:
+        # return immediately with the job_id (no allocation wait). This lets the
+        # runner persist the submitted manifest right after `sbatch`, so even if
+        # the Livebook runtime later dies during polling, the run is recorded as
+        # submitted and §7b (`collect_last_hpc_results!`) can recover it. The
+        # actual completion wait is done below by `wait_for_completion!`.
+        wait_for_node: false
       )
 
     IO.puts("[runner] Job submitted — ID: #{submitted.job_id}")
 
     submitted_run =
       run
+      |> Map.put(:remote_root, hpc.remote_root)
       |> Run.mark_submitted(%{
         single_node: %{
           job_id: submitted.job_id,
@@ -234,13 +270,15 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
         }
       })
 
+    persist_run_manifest(submitted_run)
     wait_for_completion!(session, submitted_run, hpc)
 
     results =
       try do
         Results.collect(session, submitted_run,
           include_raw_output: hpc.include_raw_output,
-          remote_root: hpc.remote_root
+          remote_root: hpc.remote_root,
+          collect_retry_forever: true
         )
       rescue
         e ->
@@ -277,7 +315,49 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
     end
   end
 
+  # Persists the run manifest to the local store so the run_id is discoverable
+  # and its results can be resumed later (e.g. after a transient SSH failure)
+  # without re-running. Called at run start (plan record) and right after a
+  # successful submission (with :submitted status + job ids).
+  #
+  # Bounded and non-fatal: on this Windows + Livebook-embedded-runtime setup a
+  # persistence write right after submit can freeze the node, so the write runs
+  # in a Task with a 15 s cap. If it does not finish, we log and continue — the
+  # submitted status is a convenience, and results stay recoverable via
+  # `collect_hpc_results!` / `collect_last_hpc_results!` remote discovery.
+  defp persist_run_manifest(%Run{} = run, opts \\ []) do
+    task = Task.async(fn -> Store.save_run!(run, opts) end)
+
+    case Task.yield(task, 15_000) || Task.shutdown(task) do
+      {:ok, path} ->
+        path
+
+      nil ->
+        IO.puts(
+          "[runner] ⚠ Could not persist run manifest #{run.id} within 15s — " <>
+            "skipped (non-fatal, results still recoverable via §7b)"
+        )
+
+        nil
+    end
+  rescue
+    e ->
+      IO.puts("[runner] Could not persist run manifest: #{Exception.message(e)}")
+      nil
+  end
+
+  # ISO-8601 timestamp for extended-debug trace lines.
+  defp stamp do
+    DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+  end
+
   defp sync_problems(%Run{} = run, %HpcConnect.Session{} = session, hpc) do
+    if session.extended_debug do
+      IO.puts(
+        "[hpc-ext-debug] #{stamp()} sync: pre-converting inputs (cvc5→smt2, lash/shot_tx→thf)"
+      )
+    end
+
     # Pre-convert problems for provers whose `input` is not `:tptp`
     # (cvc5 → SMT, lash → THF). Must happen before syncing because the
     # converted files are uploaded to the vault alongside the originals.
@@ -305,7 +385,16 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
     end)
 
     remote_problems =
-      TPTPSync.sync_problem_set!(session, run.problems, remote_tptp_dir: hpc.remote_tptp_dir)
+      TPTPSync.sync_problem_set!(session, run.problems,
+        remote_tptp_dir: hpc.remote_tptp_dir,
+        extended_debug: session.extended_debug
+      )
+
+    if session.extended_debug do
+      IO.puts(
+        "[hpc-ext-debug] #{stamp()} sync: uploaded #{length(remote_problems)} problems to #{hpc.remote_tptp_dir}"
+      )
+    end
 
     %{run | problems: remote_problems}
   end

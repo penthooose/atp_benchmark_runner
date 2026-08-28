@@ -1,39 +1,44 @@
-# HPC Benchmark
+# HPC ATP Benchmark
 
 ```elixir
 Mix.install([
-  {:atp_benchmark_runner, path: "item_14_ATP_Benchmark_Runner/atp_benchmark_runner", force: true}
+  {:atp_benchmark_runner, github: "penthooose/atp_benchmark_runner", force: true}
 ])
 ```
 
-## 1. Configure paths from `.env`
+## 1. Configure the environment (setup overlay)
 
 ```elixir
-env_file = Path.expand("../.env", __DIR__)
+# Fields are pre-filled from `.env` / `.env.example` and from the
+# last session (the file only fills blank fields; path fields default to the
+# Livebook session temp dir).
 
-# Load .env values into the OS environment (Config.get() and hpc_connect pick them up).
-env_map = AtpBenchmarkRunner.load_env!(env_file)
+setup =
+	AtpBenchmarkRunner.prepare_livebook_setup(
+		env_file: Path.expand("../.env", __DIR__),
+		fallback_env_file: Path.expand("../.env.example", __DIR__),
+		submit_label: "Setup"
+	)
 
-IO.puts("Configured paths:")
-IO.puts("  TPTP_ROOT:      #{AtpBenchmarkRunner.tptp_dir()}")
-IO.puts("  Store dir:      #{AtpBenchmarkRunner.store_dir()}")
-IO.puts("  SMT temp dir:   #{AtpBenchmarkRunner.Config.smt_tmp_dir()}")
-IO.puts("  .env file:      #{env_file}")
+env_map = setup.env_map
+env_file = setup.env_file
+ssh_key_path = setup.ssh_key_path
 ```
-
-This notebook is the HPC counterpart to the local example. It uses the local
-workspace versions of both libraries because `atp_benchmark_runner` depends on
-the sibling `hpc_connect` path from its `mix.exs`.
-
----
 
 ## 2. Bootstrap the HPC session
 
 ```elixir
+# Use the preconfigured values from the §1 setup overlay directly, so this works
+# on any machine / server without relying on a local `.env`. `env_file` (the
+# overlay-written temp .env) supplies the remaining session settings (work/vault
+# dirs, steady connection, retry, ...).
 boot =
 	HpcConnect.bootstrap(
 		mode: :local,
-		env_file: env_file
+		env_file: env_file,
+		cluster: env_map["HPC_CONNECT_CLUSTER"] || env_map["HPC_CONNECT_SSH_ALIAS"] || "helma",
+		username: env_map["HPC_CONNECT_USERNAME"],
+		key_path: env_map["HPC_CONNECT_IDENTITY_FILE"]
 	)
 
 session = boot.session
@@ -74,23 +79,23 @@ selected_problems = [
   "THF001+0.p"
 ]
 
-# {downloaded, download_warnings} =
-# 	AtpBenchmarkRunner.download_tptp_problems!(selected_problems, force: false)
+{downloaded, download_warnings} =
+	AtpBenchmarkRunner.download_tptp_problems!(selected_problems, force: false)
 
-# IO.puts("Downloaded #{length(downloaded)} problem(s):")
-# Enum.each(downloaded, fn problem ->
-# 	IO.puts("  ✅ #{problem.name}  status=#{problem.expected_status}  rating=#{problem.rating}")
-# 	IO.puts("     -> #{problem.path}")
-# end)
+IO.puts("Downloaded #{length(downloaded)} problem(s):")
+Enum.each(downloaded, fn problem ->
+	IO.puts("  ✅ #{problem.name}  status=#{problem.expected_status}  rating=#{problem.rating}")
+	IO.puts("     -> #{problem.path}")
+end)
 
-# if download_warnings == [] do
-# 	IO.puts("No warnings.")
-# else
-# 	IO.puts("Warnings (#{length(download_warnings)}):")
-# 	Enum.each(download_warnings, fn w ->
-# 		IO.puts("  ⚠️  #{w.name}: #{inspect(w.reason)}")
-# 	end)
-# end
+if download_warnings == [] do
+	IO.puts("No warnings.")
+else
+	IO.puts("Warnings (#{length(download_warnings)}):")
+	Enum.each(download_warnings, fn w ->
+		IO.puts("  ⚠️  #{w.name}: #{inspect(w.reason)}")
+	end)
+end
 ```
 
 ## 3. Pick provers and select problems from TPTP_ROOT
@@ -146,13 +151,16 @@ prepare_images_now? = false
 # One call: uploads each prover's apptainer.def and builds the remote .sif.
 # force: true rebuilds even existing .sif images
 # (apptainer build --force --ignore-fakeroot-command).
+# build_on_login_node: true (default) builds directly on the login node;
+# set false to chain all builds into a single compute-node sbatch job.
 if prepare_images_now? do
 	built_images =
 		AtpBenchmarkRunner.build_prover_images!(
 			session,
 			prover_structs,
 			install_scripts: false,
-			force: false
+			force: false,
+			build_on_login_node: true
 		)
 
 	IO.inspect(built_images, label: "Built ATP prover images")
@@ -175,11 +183,11 @@ Auto-detected per cluster (Helma CPU: 384/192, Fritz: 72/36, spr\*: 104/52).
 | `:full`     | Yes           | Maximise per-prover throughput        |
 | `:half`     | No            | Share node with other jobs; efficient |
 
-| Mode                             | `hpc_mode`     | `single_node_mode` | Resource allocation                                                  |
-| -------------------------------- | -------------- | ------------------ | -------------------------------------------------------------------- |
-| Single-node sequential (default) | `:single_node` | `:sequential`      | All provers share 1 node. Tasks one at a time; each gets node CPUs.  |
+| Mode                             | `hpc_mode`     | `single_node_mode` | Resource allocation                                                    |
+| -------------------------------- | -------------- | ------------------ | ---------------------------------------------------------------------- |
+| Single-node sequential (default) | `:single_node` | `:sequential`      | All provers share 1 node. Tasks one at a time; each gets node CPUs.    |
 | Single-node parallel             | `:single_node` | `:parallel`        | All provers share 1 node. Tasks run concurrently (≤ `max_parallel`). |
-| Multi-node (prover per node)     | `:multi_node`  | —                  | Each prover gets its own node.                                       |
+| Multi-node (prover per node)     | `:multi_node`  | —                | Each prover gets its own node.                                         |
 
 ```elixir
 # ── Single-node sequential, full node (default) ───────────────
@@ -193,67 +201,17 @@ plan =
 		single_node_mode: :sequential,
 		timeout_seconds: 30,
 		wait_for_completion: false,
-		prepare_images: false
+		prepare_images: false,
+    extended_debug: false
 	)
 
 IO.inspect(plan, label: "Single-node sequential, full node (default)", limit: :infinity)
 ```
 
-```elixir
-# ── Single-node sequential, half node ────────────────────────
-plan_half =
-	AtpBenchmarkRunner.bootstrap(
-		session,
-		selected_provers,
-		problems,
-		mode: :hpc,
-		hpc_mode: :single_node,
-		single_node_mode: :sequential,
-		node_size: :half,
-		timeout_seconds: 30,
-		wait_for_completion: false,
-		prepare_images: false
-	)
-
-IO.inspect(plan_half, label: "Single-node sequential, half node", limit: :infinity)
-```
-
-```elixir
-# ── Single-node parallel, full node ──────────────────────────
-plan_parallel =
-	AtpBenchmarkRunner.bootstrap(
-		session,
-		selected_provers,
-		problems,
-		mode: :hpc,
-		hpc_mode: :single_node,
-		single_node_mode: :parallel,
-		max_parallel_jobs: 4,
-		timeout_seconds: 30,
-		wait_for_completion: false,
-		prepare_images: false
-	)
-
-IO.inspect(plan_parallel, label: "Single-node parallel plan", limit: :infinity)
-```
-
-```elixir
-# ── Multi-node ────────────────────────────────────────────────
-# Each prover gets its own node (default full).
-plan_multi =
-	AtpBenchmarkRunner.bootstrap(
-		session,
-		selected_provers,
-		problems,
-		mode: :hpc,
-		hpc_mode: :multi_node,
-		timeout_seconds: 30,
-		wait_for_completion: false,
-		prepare_images: false
-	)
-
-IO.inspect(plan_multi, label: "Multi-node plan", limit: :infinity)
-```
+The other execution modes (`:half` node, single-node parallel, multi-node) are
+documented with ready-to-paste examples in the
+[cheat sheet](docs/commands_cheat_sheet.md#hpc-run) and the
+[manual](docs/atp_br_manual.md#43b-execution-modes-and-resource-strategy).
 
 If you want the runner itself to prepare missing prover images immediately
 before launch, set `prepare_images: true` in the benchmark plan above.
@@ -264,25 +222,42 @@ before launch, set `prepare_images: true` in the benchmark plan above.
 
 ```elixir
 IO.puts("Starting HPC benchmark run...")
+IO.puts("  Run ID: #{plan.id}")
 IO.puts("  Provers: #{inspect(Enum.map(selected_provers, & &1))}")
 IO.puts("  Problems: #{length(problems)}")
 IO.puts("  Plan mode: #{plan.metadata[:hpc][:hpc_mode]}/#{plan.metadata[:hpc][:single_node_mode]}")
 IO.puts("  Partition: #{plan.metadata[:hpc][:partition]}")
 IO.puts("")
 
+results = AtpBenchmarkRunner.run_benchmark(plan)
+```
 
-{t_ms, results} =
-	:timer.tc(fn ->
-		try do
-			AtpBenchmarkRunner.run_benchmark(plan)
-		rescue
-			e ->
-				IO.puts("Benchmark failed: #{Exception.message(e)}")
-				[]
-		end
-	end)
+---
 
-IO.puts("Cell finished in #{Float.round(t_ms / 1_000_000, 2)}s")
+## 7b. Collect only last run's results
+
+The run's ID is printed when section 7 starts (`Run ID: ...`), and the run
+manifest (`<run_id>.run.json`) is persisted in the store the moment the run
+starts. So the last run is always identifiable, even if the notebook cell
+crashes or the SSH connection dies while fetching.
+
+```elixir
+# results =
+# 	try do
+# 		AtpBenchmarkRunner.collect_last_hpc_results!(session)
+# 	rescue
+# 		e ->
+# 			IO.puts("Resume failed: #{Exception.message(e)}")
+# 			[]
+# 	end
+
+# IO.puts("Fetched #{length(results)} results for the last submitted run")
+```
+
+To resume a specific run instead of the newest one:
+
+```elixir
+# results = AtpBenchmarkRunner.collect_hpc_results!(session, "run_20260827_155553_1028")
 ```
 
 ---
@@ -290,9 +265,6 @@ IO.puts("Cell finished in #{Float.round(t_ms / 1_000_000, 2)}s")
 ## 8. Results table
 
 ```elixir
-# Guard: if this cell is evaluated without section 7 having run (kernel restart
-# or an upstream edit invalidated the binding), fall back to an empty list
-# instead of crashing with "undefined variable results".
 results = binding()[:results] || []
 
 AtpBenchmarkRunner.results_table(results, memory: true)
@@ -362,65 +334,6 @@ AtpBenchmarkRunner.print_raw_output(results, :vampire, "GRP001-0")
 
 ## 10. Visualizations
 
-Mermaid-based visual companions to `explain/1` / `explain_full/1`. Each cell
-returns a `Kino.Mermaid` diagram (or a fenced markdown block outside
-Livebook). If the real run has not produced results yet — or the kernel was
-restarted — the cells fall back to synthetic sample results so you can see the
-look of every diagram without needing the Docker images.
-
-### Synthetic sample results (fallback when section 7 has not run)
-
-```elixir
-defmodule VisualizeSample do
-  def results do
-    refutation = """
-    % SZS output start CNFRefutation
-    fof(unit_not_a, axiom, ~(a), file('GRP001-0.p', unit_not_a)).
-    fof(unit_a, axiom, a, file('GRP001-0.p', unit_a)).
-    fof(c_0_2, plain, ~a, inference(fof_simplification,[status(thm)],[unit_not_a])).
-    cnf(c_0_4, plain, (~a), inference(split_conjunct,[status(thm)],[c_0_2])).
-    cnf(c_0_5, plain, (a), inference(split_conjunct,[status(thm)],[unit_a])).
-    cnf(c_0_6, plain, ($false), inference(cn,[status(thm)],[inference(rw,[status(thm)],[c_0_4, c_0_5])]), ['proof']).
-    % SZS output end CNFRefutation
-    """
-
-    [
-      AtpBenchmarkRunner.Result.new(
-        problem_id: "GRP001-0",
-        prover: :eprover,
-        szs_status: "Theorem",
-        wall_time_ms: 812,
-        memory_kb: 12_345,
-        raw_output: refutation
-      ),
-      AtpBenchmarkRunner.Result.new(
-        problem_id: "GRP002+0",
-        prover: :eprover,
-        szs_status: "GaveUp",
-        wall_time_ms: 30_000,
-        memory_kb: 8_100
-      ),
-      AtpBenchmarkRunner.Result.new(
-        problem_id: "GRP001-0",
-        prover: :vampire,
-        szs_status: "Theorem",
-        wall_time_ms: 402,
-        memory_kb: 9_900
-      ),
-      AtpBenchmarkRunner.Result.new(
-        problem_id: "SMT001+0",
-        prover: :cvc5,
-        szs_status: "Satisfiable",
-        wall_time_ms: 604,
-        memory_kb: 4_200
-      )
-    ]
-  end
-end
-```
-
-### 10a. Single result — `AtpBenchmarkRunner.visualize(result)`
-
 ```elixir
 results = binding()[:results] || []
 results = if results == [], do: VisualizeSample.results(), else: results
@@ -433,7 +346,7 @@ target =
 if target, do: AtpBenchmarkRunner.visualize(target), else: "No solved eprover result found."
 ```
 
-### 10b. Proof dependency graph — `AtpBenchmarkRunner.visualize_proof(result)`
+### 10b. Proof dependency graph
 
 For provers that emit machine-readable TPTP clause refutations (E, Vampire)
 this renders the proof as a dependency DAG. Other provers fall back to a
@@ -451,11 +364,7 @@ target =
 if target, do: AtpBenchmarkRunner.visualize_proof(target), else: "No parseable proof found."
 ```
 
-### 10c. Run summary — status pie + wall-time chart
-
-`AtpBenchmarkRunner.visualize(results)` is the one-call shortcut for
-`Visualize.status_pie/2` + `Visualize.timeline/2`; it pushes both diagrams as
-Livebook outputs.
+### 10c. Run summary (status + wall-time chart)
 
 ```elixir
 results = binding()[:results] || []
@@ -467,7 +376,7 @@ case AtpBenchmarkRunner.visualize(results) do
 end
 ```
 
-### 10d. Report scoreboard — `AtpBenchmarkRunner.visualize(report)`
+### 10d. Report scoreboard
 
 ```elixir
 results = binding()[:results] || []
@@ -518,18 +427,12 @@ IO.puts("Report saved: #{paths.report_path}")
 
 ## 12. Cross-run comparison & statistics
 
-Compares **all** stored runs at once. Results stay in JSON files under the
-store dir (no database yet — columns may still change during development).
-Each (problem, prover) is aggregated across every run, producing:
-
-- a per-problem × prover **best-time heatmap** (min time per prover; fastest solver green → slowest red, rainbow in between; unsolved gray),
-
-* a per-problem × prover **time-range matrix** (min–max ms across runs),
-* a **prover ranking** by solved problems.
+Compares all stored runs at once. Results stay in JSON files under the
+store dir (no database yet, as columns may still change during development).
 
 Ranking counts `Timeout`/`GaveUp` as real attempts (never excluded). By default
 `InputError`/`TypeError`/`UnsupportedLogic`/`Error` are treated as non-attempts
-(prover not applicable to that problem) — override with `:exclude_statuses`
+(prover not applicable to that problem); override with `:exclude_statuses`
 (pass `[]` to include them).
 
 ```elixir
@@ -563,4 +466,15 @@ stats_common =
   )
 
 AtpBenchmarkRunner.MultiRun.print(stats_common)
+```
+
+---
+
+## 13. Clean up the temporary SSH key (Optional)
+
+Deletes the SSH key that was **uploaded** in §1 (stored temporarily), if any.
+A persistent `~/.ssh` key is never touched.
+
+```elixir
+AtpBenchmarkRunner.cleanup_livebook_setup()
 ```

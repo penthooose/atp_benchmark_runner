@@ -121,6 +121,35 @@ defmodule AtpBenchmarkRunner do
   end
 
   @doc """
+  Renders the Livebook setup overlay (Kino form) for configuring every env var
+  the runner reads, without needing a local `.env` file (e.g. on a container
+  server). Returns `%{env_map:, env_file:, values:, persisted_path:}`.
+
+      setup = AtpBenchmarkRunner.prepare_livebook_setup(
+        env_file: Path.expand("../.env", __DIR__),
+        fallback_env_file: Path.expand("../.env.example", __DIR__),
+        submit_label: "Setup"
+      )
+
+  See `AtpBenchmarkRunner.LivebookSetup` for details.
+  """
+  @spec prepare_livebook_setup(keyword()) :: map()
+  def prepare_livebook_setup(opts \\ []),
+    do: AtpBenchmarkRunner.LivebookSetup.prepare(opts)
+
+  @doc """
+  Deletes the temporary SSH key uploaded by the Livebook setup overlay (never
+  the persistent `~/.ssh` key). Prints a short notice; no error when nothing is
+  left to delete.
+
+      AtpBenchmarkRunner.cleanup_livebook_setup()
+  """
+  @spec cleanup_livebook_setup(keyword()) :: :ok
+  def cleanup_livebook_setup(opts \\ []),
+    do: AtpBenchmarkRunner.LivebookSetup.cleanup(opts)
+
+
+  @doc """
   Persists a run manifest, its parsed results, and its report in one call.
 
   Returns `%{run_path:, results_path:, report_path:}`.
@@ -173,6 +202,10 @@ defmodule AtpBenchmarkRunner do
   `force: true` (alias for `force_rebuild: true`) to rebuild even if the `.sif`
   already exists — the remote build then uses
   `apptainer build --force --ignore-fakeroot-command`.
+
+  `build_on_login_node: true` (default) builds directly on the login node; set
+  it to `false` to run the builds on a compute node, where all selected images
+  are chained into a single sbatch job (one build after the other).
   """
   @spec build_prover_images!(HpcConnect.Session.t(), [Prover.t()], keyword()) :: map()
   def build_prover_images!(session, provers, opts \\ []) do
@@ -473,6 +506,13 @@ defmodule AtpBenchmarkRunner do
     provers_norm = normalize_provers(provers)
     problems_norm = normalize_problems(problems)
 
+    # `extended_debug: true` turns on per-command tracing (every SSH/SCP/upload
+    # printed with a timestamp) so a Livebook runtime crash during `run_benchmark`
+    # can be traced to the exact command. It is stored on the session (so it
+    # survives the plan round-trip via `session_config`) and in the plan metadata
+    # (so the HPC runner can emit phase-level markers).
+    session = maybe_enable_extended_debug(session, opts)
+
     hpc_config =
       HPCConfig.resolve(session, Keyword.put(opts, :prover_count, length(provers_norm)))
 
@@ -490,9 +530,17 @@ defmodule AtpBenchmarkRunner do
         mode: :hpc,
         hpc_mode: hpc_config.hpc_mode,
         hpc: hpc_config,
+        extended_debug: session.extended_debug == true,
         session_config: session_config(session)
       }
     )
+  end
+
+  defp maybe_enable_extended_debug(%HpcConnect.Session{} = session, opts) do
+    case Keyword.get(opts, :extended_debug) do
+      true -> %{session | extended_debug: true}
+      _ -> session
+    end
   end
 
   @doc """
@@ -504,6 +552,7 @@ defmodule AtpBenchmarkRunner do
   @spec run_benchmark(Run.t()) :: [Result.t()]
   def run_benchmark(%Run{} = plan) do
     mode = plan.metadata[:mode] || :local
+    IO.puts("Run ID: #{plan.id}")
 
     {t_ms, results} =
       :timer.tc(fn ->
@@ -523,8 +572,20 @@ defmodule AtpBenchmarkRunner do
           :hpc ->
             session = session_from_plan(plan)
 
+            # Honor the plan's explicit wait_for_completion instead of forcing
+            # `true` — the notebook plan carries its own value (§7 sets false so
+            # submission returns quickly; collection then rides retry-forever
+            # until results arrive).
+            plan_wait = plan.metadata[:hpc][:wait_for_completion] || false
+            run_opts = [wait_for_completion: plan_wait]
+
+            run_opts =
+              if plan.metadata[:extended_debug],
+                do: Keyword.put(run_opts, :extended_debug, true),
+                else: run_opts
+
             plan
-            |> AtpBenchmarkRunner.HPC.Runner.run(session, wait_for_completion: true)
+            |> AtpBenchmarkRunner.HPC.Runner.run(session, run_opts)
             |> Map.fetch!(:results)
 
           _ ->
@@ -536,6 +597,157 @@ defmodule AtpBenchmarkRunner do
     IO.puts("Benchmark completed in #{Float.round(elapsed_s, 2)}s")
     IO.puts("Total results: #{length(results)}")
     results
+  end
+
+  @doc """
+  Collects results for an **already-submitted** HPC run without re-running it.
+
+  This is the resume path: if `run_benchmark/1` failed while fetching results
+  (e.g. `scp failed (status 255) ... Connection refused`), the run was already
+  persisted in the store and the jobs are still on the cluster. This function
+  reconnects and fetches the results, retrying with exponential backoff
+  **until it gets them** (capped at 60 s between attempts). Results are
+  persisted via the local store and returned as a list of `Result` structs.
+
+  The run may be given either as a `%Run{}` struct or as a run id (the id
+  printed when the run started, e.g. `"run_20260827_155553_1028"`).
+
+  If the run id has no local manifest, the run's results directory is looked up
+  on the remote cluster and collected from there (this covers runs submitted
+  before manifest persistence existed, or after a local store wipe).
+
+      session = HpcConnect.Session.local(...)
+      AtpBenchmarkRunner.collect_hpc_results!(session, "run_20260827_155553_1028")
+      AtpBenchmarkRunner.collect_hpc_results!(session, run)
+
+  ## Options
+
+    * `:collect_retry_delay_ms` — initial backoff between attempts (default: 10_000 ms)
+  """
+  @spec collect_hpc_results!(HpcConnect.Session.t(), Run.t() | binary(), keyword()) :: [
+          Result.t()
+        ]
+  def collect_hpc_results!(%HpcConnect.Session{} = session, run_or_id, opts \\ []) do
+    {run, default_forever?} = resolve_run!(session, run_or_id, opts)
+    opts = Keyword.put_new(opts, :collect_retry_forever, default_forever?)
+
+    {_results_path, results} =
+      AtpBenchmarkRunner.HPC.Results.collect_and_store!(session, run, opts)
+
+    results
+  end
+
+  defp resolve_run!(session, run_or_id, opts) do
+    case run_or_id do
+      %Run{} = run ->
+        {run, true}
+
+      run_id when is_binary(run_id) ->
+        case Store.find_run_path(run_id, opts) do
+          nil ->
+            case AtpBenchmarkRunner.HPC.Results.find_remote_run(session, run_id, opts) do
+              nil ->
+                raise ArgumentError,
+                      "No run found for #{inspect(run_id)} — not in the local store " <>
+                        "(#{Store.default_dir()}) and no matching results dir on the cluster. " <>
+                        "The run may never have reached sbatch (e.g. SSH refused during problem " <>
+                        "sync). Use `Store.list_runs/1` for local run ids."
+
+              run ->
+                # Remote-discovered (no local manifest): the run is finished, so
+                # collect with finite retries rather than polling forever.
+                {run, false}
+            end
+
+          path ->
+            run = Store.load_run!(path)
+
+            # Only a run that was actually submitted can still be producing
+            # results — a draft manifest (persisted at run start but never
+            # reaching sbatch) must collect with finite retries, otherwise a
+            # crashed/failed run would hang polling forever.
+            submitted? =
+              run.status == :submitted and is_map(run.submitted_jobs) and
+                map_size(run.submitted_jobs) > 0
+
+            if submitted? do
+              IO.puts("[collect] Resuming submitted run #{run.id}")
+            else
+              IO.puts(
+                "[collect] Run #{run.id} was never submitted (draft manifest) — " <>
+                  "collecting with finite retries; likely no results to fetch."
+              )
+            end
+
+            {run, submitted?}
+        end
+    end
+  end
+
+  @doc """
+  Fetches the results of the **most recently submitted** HPC run from the local
+  store without running anything again.
+
+  Looks up the newest run manifest (`*.run.json`) in the store, loads it, and
+  delegates to `collect_hpc_results!/3` (retry-until-success, results
+  persisted). Useful after a crashed or interrupted notebook run.
+
+  Only manifests that were actually submitted (have submitted SLURM job ids) are
+  considered — a plan persisted at run start but that never reached `sbatch`
+  (e.g. SSH refused during problem sync) is skipped. If no submitted local
+  manifest exists, the newest run directory on the remote cluster is used
+  instead (covering runs that were never persisted locally).
+
+      session = HpcConnect.Session.local(...)
+      AtpBenchmarkRunner.collect_last_hpc_results!(session)
+
+  Raises an `ArgumentError` when no submitted run exists either locally or on
+  the cluster.
+  """
+  @spec collect_last_hpc_results!(HpcConnect.Session.t(), keyword()) :: [Result.t()]
+  def collect_last_hpc_results!(%HpcConnect.Session{} = session, opts \\ []) do
+    manifests = Store.list_runs(opts)
+
+    submitted_path =
+      Enum.find(manifests, fn path ->
+        run = Store.load_run!(path)
+
+        run.status == :submitted and is_map(run.submitted_jobs) and
+          map_size(run.submitted_jobs) > 0
+      end)
+
+    case submitted_path do
+      nil ->
+        case AtpBenchmarkRunner.HPC.Results.latest_remote_run(session, opts) do
+          nil ->
+            drafts =
+              Enum.count(manifests, fn path ->
+                Store.load_run!(path).status != :submitted
+              end)
+
+            hint =
+              if drafts > 0 do
+                "#{drafts} local manifest(s) exist but none has submitted jobs, and no run " <>
+                  "directory was found on the cluster — the run likely failed before sbatch " <>
+                  "(e.g. SSH refused during problem sync)."
+              else
+                "No local manifests and no run directory found on the cluster. " <>
+                  "Submit a run first (e.g. via `run_benchmark/1`)."
+              end
+
+            raise ArgumentError,
+                  "No submitted HPC run found locally (#{Store.default_dir()}) or on the " <>
+                    "cluster. #{hint}"
+
+          run ->
+            collect_hpc_results!(session, run, Keyword.put(opts, :collect_retry_forever, false))
+        end
+
+      path ->
+        run = Store.load_run!(path)
+        IO.puts("[collect] Resuming submitted run #{run.id} (#{Path.basename(path)})")
+        collect_hpc_results!(session, run, opts)
+    end
   end
 
   @doc """
@@ -1073,6 +1285,13 @@ defmodule AtpBenchmarkRunner do
       work_dir: session.work_dir,
       vault_dir: session.vault_dir,
       port_range: Tuple.to_list(session.port_range),
+      # These two flags must survive the plan round-trip: `run_benchmark`
+      # rebuilds the session from session_config, and without them it silently
+      # degrades to fresh-per-command SSH with finite retries (gateway
+      # throttling stalls the run with no job created).
+      steady_connection: session.steady_connection,
+      retry_forever: session.retry_forever,
+      extended_debug: session.extended_debug == true,
       env: session.env
     }
   end

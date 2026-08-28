@@ -115,11 +115,10 @@ defmodule AtpBenchmarkRunner.MultiRun do
           end)
 
         Enum.map(per_prover, fn p ->
-          attempted =
-            Enum.count(common, fn pid ->
-              (Map.get(cells, {pid, p.prover}) || empty_cell()).attempted
-            end)
-
+          # Every prover has a cell for every common problem (by construction),
+          # so `attempted` is the full shared set — even non-applicable statuses
+          # (e.g. InputError) count here, keeping all provers on the same set.
+          attempted = length(common)
           solved = Enum.count(common, &Map.get(p.by_problem, &1, false))
           rate = if attempted > 0, do: solved / attempted, else: 0.0
 
