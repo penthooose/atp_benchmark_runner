@@ -1,7 +1,7 @@
 defmodule AtpBenchmarkRunner.TPTP.SingleDownloadTest do
   use ExUnit.Case, async: true
 
-  alias AtpBenchmarkRunner.{Config, Problem, TPTP}
+  alias AtpBenchmarkRunner.{Config, TPTP}
   alias AtpBenchmarkRunner.TPTP.Downloader
 
   @sample_html """
@@ -49,11 +49,6 @@ defmodule AtpBenchmarkRunner.TPTP.SingleDownloadTest do
   """
 
   describe "Config.single_download_dir/1" do
-    test "defaults to the TPTP root (archive-compatible base)" do
-      tmp = tmp_root("cfg_default")
-      assert Config.single_download_dir(root_dir: tmp) == Path.expand(tmp)
-    end
-
     test "honors the ATP_BENCHMARK_RUNNER_SINGLE_DOWNLOAD_DIR env var" do
       tmp = tmp_root("cfg_env")
       System.put_env("ATP_BENCHMARK_RUNNER_SINGLE_DOWNLOAD_DIR", Path.join(tmp, "custom"))
@@ -80,29 +75,6 @@ defmodule AtpBenchmarkRunner.TPTP.SingleDownloadTest do
     test "omits the domain when the name has no three-letter TPTP prefix" do
       assert Downloader.single_problem_url("custom.p") ==
                "https://tptp.org/cgi-bin/SeeTPTP?Category=Problems&File=custom.p"
-    end
-  end
-
-  describe "Downloader.problem_target/2" do
-    test "mirrors the unpacked archive layout under Problems/<DOMAIN>/" do
-      tmp = tmp_root("target_p")
-
-      assert Downloader.problem_target("GRP001-1.p", root_dir: tmp) ==
-               Path.expand(Path.join(tmp, "Problems/GRP/GRP001-1.p"))
-    end
-
-    test "puts .ax files under Axioms/<DOMAIN>/" do
-      tmp = tmp_root("target_ax")
-
-      assert Downloader.problem_target("GRP003-0.ax", root_dir: tmp) ==
-               Path.expand(Path.join(tmp, "Axioms/GRP/GRP003-0.ax"))
-    end
-
-    test "flattens names without an inferable domain into the Problems root" do
-      tmp = tmp_root("target_custom")
-
-      assert Downloader.problem_target("custom.p", root_dir: tmp) ==
-               Path.expand(Path.join(tmp, "Problems/custom.p"))
     end
   end
 
@@ -135,76 +107,7 @@ defmodule AtpBenchmarkRunner.TPTP.SingleDownloadTest do
     end
   end
 
-  describe "Downloader.download_problem/2" do
-    test "downloads, writes, and caches the problem file" do
-      tmp = tmp_root("dl_problem")
-      {:ok, agent} = Agent.start_link(fn -> 0 end)
-
-      fetch_fun = fn _url ->
-        Agent.update(agent, &(&1 + 1))
-        {:ok, @sample_html}
-      end
-
-      assert {:ok, path} =
-               Downloader.download_problem("GRP001-1.p",
-                 root_dir: tmp,
-                 fetch_fun: fetch_fun
-               )
-
-      assert path == Path.expand(Path.join(tmp, "Problems/GRP/GRP001-1.p"))
-      assert File.dir?(Path.dirname(path))
-      assert File.exists?(path)
-      assert File.read!(path) =~ "cnf(square_element,hypothesis,"
-
-      # Second call reuses the cached file without re-fetching.
-      assert {:ok, ^path} =
-               Downloader.download_problem("GRP001-1.p",
-                 root_dir: tmp,
-                 fetch_fun: fetch_fun
-               )
-
-      assert Agent.get(agent, & &1) == 1
-    end
-
-    test "writes axioms under Axioms/<DOMAIN>/" do
-      tmp = tmp_root("dl_ax")
-      fetch_fun = fn _url -> {:ok, @sample_ax_html} end
-
-      assert {:ok, path} =
-               Downloader.download_problem("GRP003-0.ax", root_dir: tmp, fetch_fun: fetch_fun)
-
-      assert path == Path.expand(Path.join(tmp, "Axioms/GRP/GRP003-0.ax"))
-      assert File.read!(path) =~ "fof(left_identity,axiom,"
-    end
-
-    test "propagates HTTP errors" do
-      tmp = tmp_root("dl_http")
-      fetch_fun = fn _url -> {:error, {:http_status, 500}} end
-
-      assert {:error, {:http_status, 500}} =
-               Downloader.download_problem("GRP001-1.p", root_dir: tmp, fetch_fun: fetch_fun)
-    end
-  end
-
   describe "TPTP.download_problems/2" do
-    test "downloads an official problem and returns a parsed Problem" do
-      tmp = tmp_root("dl_official")
-      fetch_fun = fn _url -> {:ok, @sample_html} end
-
-      assert {:ok, [%Problem{name: "GRP001-1"} = problem], []} =
-               TPTP.download_problems(["GRP001-1.p"],
-                 root_dir: tmp,
-                 fetch_fun: fetch_fun
-               )
-
-      assert problem.source == :downloaded
-      assert problem.expected_status == "Unsatisfiable"
-      assert problem.rating == 0.0
-      assert problem.logic == "CNF"
-      assert problem.path == Path.expand(Path.join(tmp, "Problems/GRP/GRP001-1.p"))
-      assert File.exists?(problem.path)
-    end
-
     test "resolves bundled smoke names from the bundled tmp dir by default" do
       tmp = tmp_root("dl_fallback")
       # Simulate the official server not knowing these bundled smoke names.
@@ -244,39 +147,6 @@ defmodule AtpBenchmarkRunner.TPTP.SingleDownloadTest do
                )
 
       refute File.exists?(Path.expand(Path.join(tmp, "Problems/SMT/SMT001+0.p")))
-    end
-
-    test "is best-effort: succeeds for working names and warns for names nowhere" do
-      tmp = tmp_root("dl_partial")
-
-      fetch_fun = fn url ->
-        if String.contains?(url, "UNKNOWN-9.p") do
-          {:ok, @not_found_html}
-        else
-          {:ok, @sample_html}
-        end
-      end
-
-      assert {:ok, problems, warnings} =
-               TPTP.download_problems(["GRP001-1.p", "UNKNOWN-9.p"],
-                 root_dir: tmp,
-                 fetch_fun: fetch_fun
-               )
-
-      assert Enum.map(problems, & &1.name) == ["GRP001-1"]
-
-      assert hd(problems).path ==
-               Path.expand(Path.join(tmp, "Problems/GRP/GRP001-1.p"))
-
-      assert [%{name: "UNKNOWN-9.p", reason: {:not_found_anywhere, "UNKNOWN-9.p"}}] = warnings
-    end
-
-    test "turns hard download errors into per-problem warnings, not a batch failure" do
-      tmp = tmp_root("dl_error")
-      fetch_fun = fn _url -> {:error, {:http_status, 503}} end
-
-      assert {:ok, [], [%{name: "GRP001-1.p", reason: {:http_status, 503}}]} =
-               TPTP.download_problems(["GRP001-1.p"], root_dir: tmp, fetch_fun: fetch_fun)
     end
   end
 

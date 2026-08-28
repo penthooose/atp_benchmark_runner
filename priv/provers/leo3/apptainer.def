@@ -16,8 +16,8 @@ From: buildpack-deps:stable-curl
     export https_proxy="$HTTPS_PROXY"
     export no_proxy="$NO_PROXY"
 
-    # buildpack-deps:stable-curl has glibc, curl, ca-certificates.
-    # No package manager needed in %post — avoids setgroups/chown on FAU nodes.
+    # buildpack-deps:stable-curl ships glibc, curl, ca-certificates; no
+    # package manager in %post.
 
     # Download static jq binary
     curl -fsSL "https://github.com/jqlang/jq/releases/download/jq-1.7/jq-linux64" -o /usr/local/bin/jq
@@ -51,7 +51,7 @@ From: buildpack-deps:stable-curl
     printf '#!/bin/sh\nexport PATH=/opt/java/bin:$PATH\nexec java -jar %s "$@"\n' "$jar" > /usr/local/bin/leo3
     chmod +x /usr/local/bin/leo3
     /opt/java/bin/java -jar "$jar" --help >/dev/null || true
-    # Targeted cleanup — avoid /tmp/* which hits mounted proc/sys/dev in Apptainer builds
+    # Targeted cleanup; avoid /tmp/* which can hit mounted dirs in Apptainer builds.
     rm -f /tmp/jre.tar.gz /tmp/leo3_release.json || true
 
 %runscript

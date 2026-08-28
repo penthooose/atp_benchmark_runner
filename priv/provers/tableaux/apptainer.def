@@ -20,16 +20,16 @@ From: hexpm/elixir:1.17.3-erlang-27.1-debian-bookworm-20240904
     export https_proxy="$HTTPS_PROXY"
     export no_proxy="$NO_PROXY"
 
-    # OCI extraction already provides Erlang OTP 27.1 and Elixir 1.17.3,
-    # plus ca-certificates and built-in :httpc. No apt-get needed in %post.
+    # hexpm/elixir provides Erlang OTP 27.1 + Elixir 1.17.3 and built-in
+    # :httpc; no apt-get in %post.
 
     mix local.hex --force
     mix local.rebar --force
 
     TABLEAUX_REPO="${TABLEAUX_REPO:-https://github.com/penthooose/hybrid_tableaux_solver.git}"
     TABLEAUX_REF="${TABLEAUX_REF:-main}"
-    # Download source tarball using Erlang/Elixir built-in HTTP client (hexpm/elixir lacks curl/wget).
-    # Pass URL via env var because shell vars don't expand inside single-quoted -e argument.
+    # hexpm/elixir lacks curl/wget, so the source tarball is fetched with the
+    # built-in :httpc (URL passed via env var).
     export TABLEAUX_URL="https://github.com/penthooose/hybrid_tableaux_solver/archive/refs/heads/${TABLEAUX_REF}.tar.gz"
     elixir -e '
       :ssl.start()
@@ -58,7 +58,7 @@ From: hexpm/elixir:1.17.3-erlang-27.1-debian-bookworm-20240904
     The escript entrypoint is `STS.CLI.main/1` from the hybrid_tableaux_solver Mix
     project; output follows TPTP SZS conventions so it can be collected with
     `AtpBenchmarkRunner.parse_result/4`.
-    This container always runs in symbolic-only mode (no LLM/hybrid) — the
+    This container always runs in symbolic-only mode (no LLM/hybrid): the
     default routing when OPENROUTER_API_KEY is not set ensures :symbolic_only.
     For local development, run `apptainer build` with `--build-arg TABLEAUX_REPO=<path>`
     pointing at a checked-out copy of the item #12 project.

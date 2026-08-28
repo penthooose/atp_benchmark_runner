@@ -27,14 +27,21 @@ defmodule AtpBenchmarkRunner.LivebookSetupTest do
     test "persisted value wins over env file value" do
       persisted = %{"TPTP_ROOT" => "/persisted/tptp"}
       env_map = %{"TPTP_ROOT" => "/env/tptp"}
-      defaults = LivebookSetup.resolve_defaults(LivebookSetup.inputs(), persisted, env_map, "/tmp")
+
+      defaults =
+        LivebookSetup.resolve_defaults(LivebookSetup.inputs(), persisted, env_map, "/tmp")
 
       assert defaults["TPTP_ROOT"] == "/persisted/tptp"
     end
 
     test "env file value fills when persisted is blank" do
       defaults =
-        LivebookSetup.resolve_defaults(LivebookSetup.inputs(), %{}, %{"TPTP_ROOT" => "/env/tptp"}, "/tmp")
+        LivebookSetup.resolve_defaults(
+          LivebookSetup.inputs(),
+          %{},
+          %{"TPTP_ROOT" => "/env/tptp"},
+          "/tmp"
+        )
 
       assert defaults["TPTP_ROOT"] == "/env/tptp"
     end
@@ -84,7 +91,12 @@ defmodule AtpBenchmarkRunner.LivebookSetupTest do
     end
 
     test "write_env_file returns a normalized (Path.expand'd) path" do
-      tmp = Path.join(System.tmp_dir!(), "atp_livebook_setup_test_#{System.unique_integer([:positive])}")
+      tmp =
+        Path.join(
+          System.tmp_dir!(),
+          "atp_livebook_setup_test_#{System.unique_integer([:positive])}"
+        )
+
       File.mkdir_p!(tmp)
       on_exit(fn -> File.rm_rf!(tmp) end)
 
@@ -99,7 +111,12 @@ defmodule AtpBenchmarkRunner.LivebookSetupTest do
 
   describe "prepare/1 in :local mode" do
     setup do
-      tmp = Path.join(System.tmp_dir!(), "atp_livebook_setup_test_#{System.unique_integer([:positive])}")
+      tmp =
+        Path.join(
+          System.tmp_dir!(),
+          "atp_livebook_setup_test_#{System.unique_integer([:positive])}"
+        )
+
       env_file = Path.join(tmp, "input.env")
       File.mkdir_p!(tmp)
       File.write!(env_file, "TPTP_ROOT=/from/file/tptp\nHPC_CONNECT_CLUSTER=fritz\n")
@@ -227,7 +244,12 @@ defmodule AtpBenchmarkRunner.LivebookSetupTest do
 
   describe "cleanup/1" do
     test "prints a friendly notice when no temp key is recorded" do
-      tmp = Path.join(System.tmp_dir!(), "atp_livebook_setup_test_#{System.unique_integer([:positive])}")
+      tmp =
+        Path.join(
+          System.tmp_dir!(),
+          "atp_livebook_setup_test_#{System.unique_integer([:positive])}"
+        )
+
       File.mkdir_p!(tmp)
       on_exit(fn -> File.rm_rf!(tmp) end)
 

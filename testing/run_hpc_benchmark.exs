@@ -1,8 +1,8 @@
-# Full HPC benchmark via `mix run` — the reliable path.
+# Full HPC benchmark via `mix run`, the reliable path.
 #
-# The Livebook *embedded runtime* on Windows can die during the SSH-heavy
+# The Livebook embedded runtime on Windows can die during the SSH-heavy
 # sync/submit phase ("Runtime terminated unexpectedly - no connection"), even
-# though the exact same code works fine under `mix run`. This script runs the
+# though the exact same code works under `mix run`. This script runs the
 # whole §1→§7 notebook flow outside Livebook:
 #
 #     bootstrap -> build plan -> run_benchmark (sync + submit + wait + collect)

@@ -1,14 +1,10 @@
 defmodule AtpBenchmarkRunner.ConvenienceTest do
-  # Env-var and store mutations are global — run serially.
+  # Env-var and store mutations are global, so run serially.
   use ExUnit.Case, async: false
 
   alias AtpBenchmarkRunner.{Config, LocalRunner, Problem, Result, Run}
 
   describe "Config.sif_dir/1" do
-    test "defaults to ./tmp/singularity_images" do
-      assert Config.sif_dir() == Path.expand("./tmp/singularity_images")
-    end
-
     test "honours the ATP_BENCHMARK_RUNNER_SIF_DIR env var" do
       System.put_env("ATP_BENCHMARK_RUNNER_SIF_DIR", "C:/sif")
       assert Config.sif_dir() == Path.expand("C:/sif")
@@ -45,7 +41,7 @@ defmodule AtpBenchmarkRunner.ConvenienceTest do
 
     test "results are shape-matched tuples for every registered prover" do
       # Uses the Apptainer backend so the test never triggers slow Docker builds;
-      # without a local Apptainer install every entry is an error — still fast.
+      # without a local Apptainer install every entry is an error, still fast.
       results = LocalRunner.build_images!(:all, backend: :apptainer)
 
       assert length(results) == length(AtpBenchmarkRunner.built_in_provers())

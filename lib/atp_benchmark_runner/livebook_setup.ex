@@ -71,23 +71,82 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
       ),
       path("ATP_BENCHMARK_RUNNER_SMT_TMP_DIR", :smt_tmp, "Paths · SMT temp dir", "smt_converted"),
       path("ATP_BENCHMARK_RUNNER_SMT_THF_DIR", :thf_tmp, "Paths · THF temp dir", "thf_converted"),
-      path("ATP_BENCHMARK_RUNNER_SIF_DIR", :sif_dir, "Paths · Apptainer SIF dir", "singularity_images"),
-      path("ATP_BENCHMARK_RUNNER_BUNDLED_EXAMPLES_DIR", :bundled, "Paths · Bundled examples", "tptp_examples"),
-      path("ATP_BENCHMARK_RUNNER_USER_EXAMPLES_DIR", :user_examples, "Paths · User examples", "user_examples"),
-      path("ATP_BENCHMARK_RUNNER_SINGLE_DOWNLOAD_DIR", :single_download, "Paths · Single download base", "downloads"),
+      path(
+        "ATP_BENCHMARK_RUNNER_SIF_DIR",
+        :sif_dir,
+        "Paths · Apptainer SIF dir",
+        "singularity_images"
+      ),
+      path(
+        "ATP_BENCHMARK_RUNNER_BUNDLED_EXAMPLES_DIR",
+        :bundled,
+        "Paths · Bundled examples",
+        "tptp_examples"
+      ),
+      path(
+        "ATP_BENCHMARK_RUNNER_USER_EXAMPLES_DIR",
+        :user_examples,
+        "Paths · User examples",
+        "user_examples"
+      ),
+      path(
+        "ATP_BENCHMARK_RUNNER_SINGLE_DOWNLOAD_DIR",
+        :single_download,
+        "Paths · Single download base",
+        "downloads"
+      ),
       # HPC connection
-      select("HPC_CONNECT_CLUSTER", :cluster, "HPC · Cluster", ["helma", "fritz", "alex", "woody", "spr", "tringpu"], "helma"),
+      select(
+        "HPC_CONNECT_CLUSTER",
+        :cluster,
+        "HPC · Cluster",
+        ["helma", "fritz", "alex", "woody", "spr", "tringpu"],
+        "helma"
+      ),
       text("HPC_CONNECT_USERNAME", :username, "HPC · Username", ""),
       text("HPC_CONNECT_IDENTITY_FILE", :identity_file, "HPC · SSH identity file", ""),
       text("HPC_CONNECT_PROXY_JUMP", :proxy_jump, "HPC · ProxyJump gateway", "csnhr.nhr.fau.de"),
-      text("HPC_CONNECT_WORK_DIR", :work_dir, "HPC · Remote work dir", "$HOME/.cache/hpc_connect"),
-      text("HPC_CONNECT_VAULT_DIR", :vault_dir, "HPC · Remote vault dir", "$HPCVAULT/.cache/hpc_connect"),
+      text(
+        "HPC_CONNECT_WORK_DIR",
+        :work_dir,
+        "HPC · Remote work dir",
+        "$HOME/.cache/hpc_connect"
+      ),
+      text(
+        "HPC_CONNECT_VAULT_DIR",
+        :vault_dir,
+        "HPC · Remote vault dir",
+        "$HPCVAULT/.cache/hpc_connect"
+      ),
       text("HPC_CONNECT_PORT_RANGE", :port_range, "HPC · Port range (optional)", ""),
-      select("HPC_CONNECT_STEADY_CONNECTION", :steady, "HPC · Steady SSH connection", ["true", "false"], "true"),
-      text("HPC_CONNECT_STEADY_TIMEOUT_SECONDS", :steady_timeout, "HPC · Steady SSH timeout (s)", "30"),
-      select("HPC_CONNECT_RETRY_FOREVER", :retry_forever, "HPC · Retry SSH errors forever", ["true", "false"], "true"),
+      select(
+        "HPC_CONNECT_STEADY_CONNECTION",
+        :steady,
+        "HPC · Steady SSH connection",
+        ["true", "false"],
+        "true"
+      ),
+      text(
+        "HPC_CONNECT_STEADY_TIMEOUT_SECONDS",
+        :steady_timeout,
+        "HPC · Steady SSH timeout (s)",
+        "30"
+      ),
+      select(
+        "HPC_CONNECT_RETRY_FOREVER",
+        :retry_forever,
+        "HPC · Retry SSH errors forever",
+        ["true", "false"],
+        "true"
+      ),
       # HPC benchmark defaults
-      select("ATP_BENCHMARK_RUNNER_HPC_MODE", :hpc_mode, "Benchmark · HPC mode", ["single_node", "multi_node"], "single_node"),
+      select(
+        "ATP_BENCHMARK_RUNNER_HPC_MODE",
+        :hpc_mode,
+        "Benchmark · HPC mode",
+        ["single_node", "multi_node"],
+        "single_node"
+      ),
       select(
         "ATP_BENCHMARK_RUNNER_HPC_SINGLE_NODE_MODE",
         :single_node_mode,
@@ -102,14 +161,47 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
         ["direct_provers", "parallel_sifs", "bundled_container"],
         "direct_provers"
       ),
-      text("ATP_BENCHMARK_RUNNER_HPC_PARTITION", :partition, "Benchmark · SLURM partition", "cpu"),
-      select("ATP_BENCHMARK_RUNNER_HPC_NODE_KIND", :node_kind, "Benchmark · Node kind", ["cpu", "gpu"], "cpu"),
+      text(
+        "ATP_BENCHMARK_RUNNER_HPC_PARTITION",
+        :partition,
+        "Benchmark · SLURM partition",
+        "cpu"
+      ),
+      select(
+        "ATP_BENCHMARK_RUNNER_HPC_NODE_KIND",
+        :node_kind,
+        "Benchmark · Node kind",
+        ["cpu", "gpu"],
+        "cpu"
+      ),
       text("ATP_BENCHMARK_RUNNER_HPC_WALLTIME", :walltime, "Benchmark · Walltime", "02:00:00"),
-      text("ATP_BENCHMARK_RUNNER_HPC_MAX_PARALLEL_JOBS", :max_parallel, "Benchmark · Max parallel jobs", "4"),
-      select("ATP_BENCHMARK_RUNNER_HPC_NODE_SIZE", :node_size, "Benchmark · Node size", ["full", "half"], "full"),
-      text("ATP_BENCHMARK_RUNNER_HPC_CPUS_PER_TASK", :cpus_per_task, "Benchmark · CPUs per task (optional)", ""),
+      text(
+        "ATP_BENCHMARK_RUNNER_HPC_MAX_PARALLEL_JOBS",
+        :max_parallel,
+        "Benchmark · Max parallel jobs",
+        "4"
+      ),
+      select(
+        "ATP_BENCHMARK_RUNNER_HPC_NODE_SIZE",
+        :node_size,
+        "Benchmark · Node size",
+        ["full", "half"],
+        "full"
+      ),
+      text(
+        "ATP_BENCHMARK_RUNNER_HPC_CPUS_PER_TASK",
+        :cpus_per_task,
+        "Benchmark · CPUs per task (optional)",
+        ""
+      ),
       text("ATP_BENCHMARK_RUNNER_HPC_NTASKS", :ntasks, "Benchmark · NTasks", "1"),
-      select("ATP_BENCHMARK_RUNNER_HPC_PREPARE_IMAGES", :prepare_images, "Benchmark · Prepare images", ["false", "true"], "false"),
+      select(
+        "ATP_BENCHMARK_RUNNER_HPC_PREPARE_IMAGES",
+        :prepare_images,
+        "Benchmark · Prepare images",
+        ["false", "true"],
+        "false"
+      ),
       # Secrets (never persisted)
       secret("HUGGINGFACE_HUB_TOKEN", :hf_token, "HuggingFace token (optional)")
     ]
@@ -547,7 +639,8 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
 
   defp ensure_kino_available! do
     unless Code.ensure_loaded?(kino_module()) and Code.ensure_loaded?(kino_input_module()) and
-             Code.ensure_loaded?(kino_control_module()) and Code.ensure_loaded?(kino_frame_module()) and
+             Code.ensure_loaded?(kino_control_module()) and
+             Code.ensure_loaded?(kino_frame_module()) and
              Code.ensure_loaded?(kino_markdown_module()) do
       raise ArgumentError,
             "Kino is required for the Livebook setup form. Add {:kino, \"~> 0.13\"} to Mix.install/1."

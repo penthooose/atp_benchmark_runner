@@ -16,15 +16,14 @@ From: buildpack-deps:stable-curl
     export https_proxy="$HTTPS_PROXY"
     export no_proxy="$NO_PROXY"
 
-    # buildpack-deps:stable-curl is Debian-based (glibc) with curl, wget,
-    # and ca-certificates pre-installed. No package manager in %post needed
-    # — avoids setgroups/chown issues on FAU compute nodes.
+    # buildpack-deps:stable-curl ships curl, wget, ca-certificates; no package
+    # manager in %post.
 
     # Download static jq binary
     curl -fsSL "https://github.com/jqlang/jq/releases/download/jq-1.7/jq-linux64" -o /usr/local/bin/jq
     chmod +x /usr/local/bin/jq
 
-    # Download static busybox (for unzip — not in buildpack-deps)
+    # Download static busybox (for unzip; not in buildpack-deps)
     curl -fsSL "https://busybox.net/downloads/binaries/1.35.0-x86_64-linux-musl/busybox" -o /usr/local/bin/busybox
     chmod +x /usr/local/bin/busybox
 

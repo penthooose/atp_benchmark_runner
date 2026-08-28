@@ -3,8 +3,8 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
 
 %labels
     Maintainer AISE Bamberg
-    Prover Lash (test build — no proxy)
-    Description Lash with tptp4X — apptainer build test
+    Prover Lash (test build: no proxy)
+    Description Lash with tptp4X: apptainer build test
     Source http://grid01.ciirc.cvut.cz/~chad/lash/
 
 %arguments
@@ -14,8 +14,8 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     set -ex
     : "${LASH_URL:=http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz}"
 
-    # ── Build Lash ──────────────────────────────────────────────────────────
-    # zlib from source (needed by minisat dependency in lash)
+    # Build lash
+    # zlib from source (needed by lash's bundled MiniSat).
     cd /tmp && \
     curl -fSL "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz" -o zlib.tar.gz && \
     tar -xzf zlib.tar.gz && \
@@ -61,8 +61,8 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     install -m 0755 "$candidate" /usr/local/bin/lash
     /usr/local/bin/lash --help >/dev/null 2>&1 || true
 
-    # ── Build tptp4X (with JJParser) ────────────────────────────────────────
-    # Compile minimal libcurl from source (no SSL)
+    # Build tptp4X (with JJParser)
+    # Minimal static libcurl (no SSL) from source.
     cd /tmp && \
     curl -fSL "https://curl.se/download/curl-8.12.1.tar.gz" -o curl.tar.gz && \
     tar -xzf curl.tar.gz && \
@@ -85,7 +85,7 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     install -m 0755 tptp4X /usr/local/bin/tptp4X
     rm -rf /tmp/tptp4X /tmp/JJParser
 
-    # ── fof2thf Python script ───────────────────────────────────────────────
+    # fof2thf Python script
     python3 -c "
 import re, sys
 A=re.compile(r'\b([a-z_][a-zA-Z0-9_]*)\s*\(')
@@ -109,7 +109,7 @@ sys.stdout.write(c)
 " > /usr/local/bin/fof2thf
     chmod +x /usr/local/bin/fof2thf
 
-    # ── lash-wrapper ─────────────────────────────────────────────────────────
+    # lash-wrapper
     cat > /usr/local/bin/lash-wrapper << 'SCRIPT'
 #!/bin/bash
 set -Eeuo pipefail
@@ -148,5 +148,5 @@ SCRIPT
     exec lash-wrapper "$@"
 
 %help
-    Lash with tptp4X — test build (no proxy, static libcurl).
+    Lash with tptp4X: test build (no proxy, static libcurl).
     Use: lash-wrapper -M /opt/lash/modes -t <timeout_seconds> <problem.p>

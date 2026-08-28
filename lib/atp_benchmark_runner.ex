@@ -148,7 +148,6 @@ defmodule AtpBenchmarkRunner do
   def cleanup_livebook_setup(opts \\ []),
     do: AtpBenchmarkRunner.LivebookSetup.cleanup(opts)
 
-
   @doc """
   Persists a run manifest, its parsed results, and its report in one call.
 

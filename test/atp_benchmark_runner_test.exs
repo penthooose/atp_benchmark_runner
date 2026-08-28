@@ -98,7 +98,7 @@ defmodule AtpBenchmarkRunnerTest do
 
   test "tableaux command forces --no-llm so benchmarks never call OpenRouter" do
     # The item #12 solver's hybrid orchestrator defaults `llm` to true and
-    # auto-reads OPENROUTER_API_KEY from its .env — without `--no-llm` it would
+    # auto-reads OPENROUTER_API_KEY from its .env: without `--no-llm` it would
     # call OpenRouter during benchmarks. Both the HPC template and the local
     # invocation must pass it.
     prover = Prover.builtin!(:tableaux)
@@ -664,7 +664,7 @@ defmodule AtpBenchmarkRunnerTest do
   end
 
   test "compare_runs accepts DB-style maps with string keys" do
-    # `:shot_tx` is the default "our prover" — these use it via the default.
+    # `:shot_tx` is the default "our prover"; these use it via the default.
     left = [
       %{
         "run_id" => "db_left",

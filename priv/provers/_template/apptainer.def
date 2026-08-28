@@ -18,10 +18,9 @@ From: buildpack-deps:stable-curl
     export https_proxy="$HTTPS_PROXY"
     export no_proxy="$NO_PROXY"
 
-    # buildpack-deps:stable-curl is Debian-based (glibc) with curl/ca-certs —
-    # no package manager here (avoids setgroups/chown issues on FAU nodes).
-    # Prefer a static release binary; if you must compile from source, note
-    # that apt-get is NOT available on FAU rootless builds (see handbook).
+    # buildpack-deps:stable-curl ships curl/ca-certs; no package manager here
+    # (avoids setgroups/chown on FAU nodes). Prefer a static release binary;
+    # apt-get is unavailable on FAU rootless builds (see handbook).
     curl -fsSL "<SOURCE_URL>" -o /tmp/prover.bin
     install -m 0755 /tmp/prover.bin /usr/local/bin/<prover>
     /usr/local/bin/<prover> --version

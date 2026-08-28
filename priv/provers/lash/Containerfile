@@ -52,9 +52,8 @@ RUN apt-get update -qq && apt-get install -y -qq \
     rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/bin/lash /usr/local/bin/lash
 COPY --from=builder /opt/lash/modes /opt/lash/modes
-# Lash is a native OCaml binary that dlopen()s its C stub libraries (dll*.so)
-# at runtime via CAML_LD_LIBRARY_PATH; the opam switch path is not in this
-# plain-ubuntu runtime, so copy the stubs and point at them.
+# lash dlopen()s OCaml C stub libraries (dll*.so) at runtime; point
+# CAML_LD_LIBRARY_PATH at the copied stubs.
 COPY --from=builder /home/opam/.opam/4.12/lib/ocaml/stublibs/dll*.so /usr/local/lib/
 ENV CAML_LD_LIBRARY_PATH=/usr/local/lib
 ENTRYPOINT ["lash"]

@@ -4,7 +4,7 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
 %labels
     Maintainer AISE Bamberg
     Prover Lash (WSL test)
-    Description Lash THF prover — WSL/direct-internet build test
+    Description Lash THF prover: WSL/direct-internet build test
     Source http://grid01.ciirc.cvut.cz/~chad/lash/
 
 %arguments
@@ -13,7 +13,7 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
 %post
     set -eux
 
-    # ── zlib (minisat dependency in Lash) ───────────────────────────────────
+    # zlib (needed by lash's bundled MiniSat)
     cd /tmp && \
     curl -fSL "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz" -o zlib.tar.gz && \
     tar -xzf zlib.tar.gz && \
@@ -24,12 +24,12 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     hash -r && \
     cd / && rm -rf /tmp/zlib-1.3.1 /tmp/zlib.tar.gz
 
-    # ── Extract Lash source ─────────────────────────────────────────────────
+    # Extract Lash source
     mkdir -p /opt/lash
     curl -fSL "$LASH_URL" -o /tmp/lash.tar.gz
     tar --no-same-owner -xzf /tmp/lash.tar.gz -C /opt/lash --strip-components=1
 
-    # ── Setup opam / OCaml ──────────────────────────────────────────────────
+    # Setup opam / OCaml
     if [ -d /home/opam/.opam ]; then
       export OPAMROOT=/home/opam/.opam
       rm -f /usr/share/opam/sandbox.sh 2>/dev/null || true
@@ -39,7 +39,7 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     fi
     eval $(opam env)
 
-    # ── Build Lash ──────────────────────────────────────────────────────────
+    # Build lash
     cd /opt/lash/source
     export C_INCLUDE_PATH="/home/opam/.opam/4.12/lib/ocaml${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
     export CPLUS_INCLUDE_PATH="/home/opam/.opam/4.12/lib/ocaml${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
@@ -62,12 +62,12 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     install -m 0755 "$candidate" /usr/local/bin/lash
     /usr/local/bin/lash --help >/dev/null 2>&1 || true
 
-    # ── Cleanup ─────────────────────────────────────────────────────────────
+    # Cleanup
     rm -rf /tmp/lash.tar.gz 2>/dev/null || true
 
 %runscript
     exec lash "$@"
 
 %help
-    Lash — THF-only higher-order ATP (WSL test build).
+    Lash: THF-only higher-order ATP (WSL test build).
     Use with: lash -M /opt/lash/modes -t <timeout_seconds> <problem.p>

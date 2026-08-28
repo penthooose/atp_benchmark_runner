@@ -136,8 +136,8 @@ defmodule AtpBenchmarkRunner.MultiRunTest do
 
       assert md =~ "# Cross-run benchmark comparison"
       assert md =~ "## Prover ranking"
-      assert md =~ "## Per-problem × prover — best time & status"
-      assert md =~ "## Per-problem × prover — time range"
+      assert md =~ "## Per-problem × prover: best time & status"
+      assert md =~ "## Per-problem × prover: time range"
       assert md =~ "✅ 100ms"
       assert md =~ "| P1 |"
       assert md =~ "r1"

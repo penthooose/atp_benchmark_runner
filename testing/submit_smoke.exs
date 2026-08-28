@@ -39,5 +39,5 @@ if job_id do
   {_, _} = HpcConnect.SSH.exec(session, "scancel #{job_id}", [])
   IO.puts("cancelled #{job_id}")
 else
-  IO.puts("NO VALID JOB ID RETURNED — sbatch output: #{inspect(out2)}")
+  IO.puts("NO VALID JOB ID RETURNED - sbatch output: #{inspect(out2)}")
 end

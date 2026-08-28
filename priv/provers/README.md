@@ -3,11 +3,11 @@
 This directory is owned by `atp_benchmark_runner` and contains, per supported
 theorem prover, the declarative spec plus two image definition files:
 
-- `prover.exs` — declarative spec (identity, command, input/parser hooks).
+- `prover.exs`: declarative spec (identity, command, input/parser hooks).
   The registry **discovers** provers by scanning for this file, so adding a
   prover is just dropping a directory. See `docs/ADDING_A_PROVER.md`.
-- `Containerfile` — OCI-compatible image (Docker / Podman) for local benchmarks
-- `apptainer.def` — Apptainer/Singularity definition for HPC `.sif` builds
+- `Containerfile`: OCI-compatible image (Docker / Podman) for local benchmarks
+- `apptainer.def`: Apptainer/Singularity definition for HPC `.sif` builds
 
 The full canonical image names use `docker.io/` prefix (e.g.
 `docker.io/aise/atp-cvc5:latest`) for seamless Podman compatibility.
@@ -22,8 +22,8 @@ The full canonical image names use `docker.io/` prefix (e.g.
 - `leo2/`
 - `tableaux/`
 - `lash/`
-- `shot_tx/` — our own higher-order (HOL/THF) tableau prover
-- `_template/` — scaffold for adding a new prover (config is
+- `shot_tx/`: our own higher-order (HOL/THF) tableau prover
+- `_template/`: scaffold for adding a new prover (config is
   `prover.exs.template`; renamed to `prover.exs` on use)
 
 ## Integration with `hpc_connect`

@@ -16,12 +16,11 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     export https_proxy="$HTTPS_PROXY"
     export no_proxy="$NO_PROXY"
 
-    # OCI extraction already provides OCaml 4.12, opam, gcc, make, git, etc.
-    # No apt-get needed in %post — avoids setgroups/chown on FAU nodes.
+    # OCI extraction provides OCaml 4.12, opam, gcc, make, git; no apt-get in %post.
 
     # Use the image's pre-configured opam root (OCaml 4.12) if available;
-    # otherwise init with the explicit compiler version to avoid downloading
-    # the latest OCaml (5.x) which breaks zipperposition's oseq dependency.
+    # otherwise init with the explicit compiler version (OCaml 5.x breaks
+    # zipperposition's oseq dependency).
     if [ -d /home/opam/.opam ]; then
       export OPAMROOT=/home/opam/.opam
     else
@@ -30,9 +29,8 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     fi
     eval $(opam env)
 
-    # pkgconf bootstrap: opam's conf-pkg-config depext tries `apt-get`, which
-    # fails on FAU nodes (setgroups/setegid blocked in the user namespace).
-    # Compiling pkgconf from source keeps `opam install --no-depext` working.
+    # opam's conf-pkg-config depext runs apt-get, which fails on FAU nodes;
+    # compile pkgconf from source so `opam install --no-depext` works.
     cd /tmp && \
     curl -fSL "https://distfiles.ariadne.space/pkgconf/pkgconf-1.9.5.tar.gz" -o pkgconf.tar.gz && \
     tar --no-same-owner -xzf pkgconf.tar.gz && \
@@ -46,9 +44,8 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     pkg-config --version
     cd / && rm -rf /tmp/pkgconf-1.9.5 /tmp/pkgconf.tar.gz
 
-    # logtk (a zipperposition dependency) requires zarith, and zarith needs
-    # libgmp. apt-get is unavailable in the rootless build, so compile gmp from
-    # source only if the base image does not already provide it.
+    # logtk needs zarith, which needs libgmp; compile it from source only if
+    # the base image does not already provide it.
     if ! { ls /usr/include/gmp.h /usr/include/x86_64-linux-gnu/gmp.h 2>/dev/null | grep -q . || ldconfig -p 2>/dev/null | grep -q 'libgmp.so'; }; then
       cd /tmp && \
       curl -fSL "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz" -o gmp.tar.xz && \
@@ -64,11 +61,10 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
     export OPAMYES=1
 
-    # --no-depext (opam >= 2.1): do not run system depext commands (apt-get) —
-    # pkg-config and gmp are bootstrapped above. The flag is unsupported on
-    # opam 2.0, so gate it on the version. `opam update` is intentionally NOT
-    # run: the image's pinned repo already contains zipperposition 2.0/2.1, and
-    # a refresh would pull menhir >= 20211215 which zipperposition excludes.
+    # --no-depext skips system apt-get (pkg-config and gmp are bootstrapped
+    # above); only opam >= 2.1 supports the flag. `opam update` is skipped: the
+    # pinned repo already has zipperposition 2.0/2.1, and a refresh pulls a
+    # menhir version it excludes.
     if opam --version | grep -Eq '^2\.[123]'; then
       opam install --no-depext zipperposition 2>&1 || \
         opam install --no-depext zipperposition.2.1 2>&1 || \
@@ -80,9 +76,7 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
         opam install zipperposition.2.0 2>&1 || \
         { echo "WARNING: Could not install zipperposition via opam" >&2; true; }
     fi
-    # Search for the binary (check both possible opam roots), including the
-    # switch's bin dir. -maxdepth 4 misses /home/opam/.opam/4.12/bin/zipperposition
-    # (depth 6), so use a depth-free search plus `opam exec -- which`.
+    # Locate the binary in either opam root and link it into /usr/local/bin.
     found=""
     found="$(opam exec -- which zipperposition 2>/dev/null || true)"
     if [ -z "$found" ]; then
@@ -109,21 +103,13 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     if [ -n "$found" ]; then
       /usr/local/bin/zipperposition --help >/dev/null 2>&1 && echo "zipperposition --help: OK" || true
     else
-      echo "FATAL: zipperposition is not installed in this image — the benchmark will fail." >&2
+      echo "FATAL: zipperposition is not installed in this image; the benchmark will fail." >&2
       exit 1
     fi
 
-    # ---------------------------------------------------------------------------
-    # Runtime relocation of the opam switch.
-    #
-    # The ocaml/opam base image keeps its switch at /home/opam/.opam, but the
-    # cluster bind-mounts the HOST /home into every container, which HIDES the
-    # image's /home/opam at runtime. Symlinks pointing into the switch (e.g.
-    # /usr/local/bin/zipperposition -> /home/opam/.opam/4.12/bin/...) then
-    # dangle and exec fails with "no such file or directory". Move the switch
-    # to /opt/opam (inside the image root, never bound from the host) and
-    # re-point the symlink.
-    # ---------------------------------------------------------------------------
+    # Relocate the opam switch to /opt/opam: the cluster bind-mounts the host
+    # /home into every container, hiding the image's /home/opam at runtime and
+    # dangling the /usr/local/bin/zipperposition symlink.
     mkdir -p /opt
     for src in /home/opam/.opam /root/.opam; do
       if [ -d "$src" ] && [ ! -d /opt/opam ]; then

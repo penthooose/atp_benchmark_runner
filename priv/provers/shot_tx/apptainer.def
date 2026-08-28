@@ -3,7 +3,7 @@ From: hexpm/elixir:1.20.3-erlang-28.4.3-debian-bookworm-20260824
 
 %labels
     Maintainer AISE Bamberg
-    Prover ShotTx (Shot — HOL tableau prover)
+    Prover ShotTx (Shot: HOL tableau prover)
     Source https://github.com/jcschuster/ShotTx
 
 %arguments
@@ -20,19 +20,16 @@ From: hexpm/elixir:1.20.3-erlang-28.4.3-debian-bookworm-20260824
     export https_proxy="$HTTPS_PROXY"
     export no_proxy="$NO_PROXY"
 
-    # OCI extraction already provides Erlang OTP and Elixir 1.20.3 — ShotTx
-    # declares `elixir: "~> 1.20"`, so the 1.17.3 tableaux base is too old.
-    # No apt-get needed in %post (FAU rootless builds block it); the image
-    # carries ca-certificates, built-in :httpc, tar, and install(1).
+    # hexpm/elixir provides Erlang + Elixir 1.20.3 (ShotTx requires
+    # `elixir: "~> 1.20"`); no apt-get in %post, downloads use :httpc.
 
     mix local.hex --force
     mix local.rebar --force
 
     SHOT_REPO="${SHOT_REPO:-https://github.com/jcschuster/ShotTx.git}"
     SHOT_REF="${SHOT_REF:-main}"
-    # Download source tarball using Erlang/Elixir built-in HTTP client
-    # (hexpm/elixir lacks curl/wget). Pass URL via env var because shell vars
-    # don't expand inside single-quoted -e argument.
+    # hexpm/elixir lacks curl/wget, so the source tarball is fetched with the
+    # built-in :httpc (URL passed via env var).
     export SHOT_URL="https://github.com/jcschuster/ShotTx/archive/refs/heads/${SHOT_REF}.tar.gz"
     elixir -e '
       :ssl.start()

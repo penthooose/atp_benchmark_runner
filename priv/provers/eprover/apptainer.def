@@ -16,9 +16,8 @@ From: buildpack-deps:stable
     export https_proxy="$HTTPS_PROXY"
     export no_proxy="$NO_PROXY"
 
-    # buildpack-deps:stable is Debian-based (glibc) and already has
-    # gcc, g++, make, git, perl, curl, ca-certificates pre-installed.
-    # No package manager needed in %post — avoids setgroups/chown on FAU nodes.
+    # buildpack-deps:stable ships gcc/g++/make/git/perl/curl; no package
+    # manager in %post.
 
     git clone --depth 1 https://github.com/eprover/eprover.git /opt/eprover
     cd /opt/eprover

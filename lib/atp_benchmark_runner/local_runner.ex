@@ -680,7 +680,8 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   # Runs a containerized prover through the local Apptainer binary. The problem
   # (or converted SMT/THF input) is bind-mounted to /problems, matching the
   # Docker path so the same command templates work on Linux/macOS.
-  defp run_apptainer(prover, problem_path, timeout_seconds, verbose) do    problem_id = Path.rootname(problem_path) |> Path.basename()
+  defp run_apptainer(prover, problem_path, timeout_seconds, verbose) do
+    problem_id = Path.rootname(problem_path) |> Path.basename()
     sif_path = local_sif_path(prover)
 
     {mount_dir, mount_file} = Input.local_mount(prover, problem_path)

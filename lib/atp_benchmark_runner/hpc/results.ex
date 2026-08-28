@@ -427,11 +427,15 @@ defmodule AtpBenchmarkRunner.HPC.Results do
     end
   end
 
-  defp do_scp_download(%HpcConnect.Session{} = session, remote_path, local_path) do
+  defp do_scp_download(
+         %HpcConnect.Session{extended_debug: extended_debug} = session,
+         remote_path,
+         local_path
+       ) do
     scp_bin = System.find_executable("scp") || "scp"
     target = scp_target(session)
 
-    if session.extended_debug do
+    if extended_debug do
       IO.puts("[hpc-ext-debug] scp: #{target}:#{remote_path} → #{local_path}")
     end
 

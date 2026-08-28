@@ -7,7 +7,7 @@
 #   docker run --rm docker.io/aise/atp-lash:latest /problems/problem.p
 ARG LASH_URL=http://grid01.ciirc.cvut.cz/~chad/lash/lash-1.14.tgz
 
-# ── Builder stage: lash + tptp4X ──────────────────────────────────────────────
+# Builder stage (lash + tptp4X)
 FROM docker.io/ocaml/opam:ubuntu-22.04-ocaml-4.12 AS builder
 ARG LASH_URL
 
@@ -15,7 +15,7 @@ USER root
 RUN apt-get update -qq && apt-get install -y -qq \
     pkg-config m4 libpcre2-dev zlib1g-dev libcurl4-openssl-dev git
 
-# ── Build Lash ────────────────────────────────────────────────────────────────
+# Build lash
 ENV OPAMROOT=/home/opam/.opam
 RUN rm -f /usr/share/opam/sandbox.sh 2>/dev/null || true
 ENV OPAMYES=1
@@ -47,7 +47,7 @@ RUN candidate="$(find /opt/lash -maxdepth 4 -type f \( -name 'lash' -o -name 'la
     fi; \
     cp "$candidate" /usr/local/bin/lash
 
-# ── Build tptp4X (with JJParser) ──────────────────────────────────────────────
+# Build tptp4X (with JJParser)
 # JJParser is a sibling-directory symlink (../JJParser) in the TPTP4X tree.
 # The Makefile handles -DTPTP_HOME quoting when TPTP_HOME is a make variable.
 RUN git clone https://github.com/TPTPWorld/JJParser.git /tmp/JJParser && \
@@ -57,7 +57,7 @@ RUN git clone https://github.com/TPTPWorld/JJParser.git /tmp/JJParser && \
     cp tptp4X /usr/local/bin/tptp4X && \
     rm -rf /tmp/tptp4X /tmp/JJParser
 
-# ── Runtime stage ─────────────────────────────────────────────────────────────
+# Runtime stage
 FROM docker.io/ubuntu:22.04
 RUN apt-get update -qq && apt-get install -y -qq \
     libgomp1 libpcre2-8-0 zlib1g libstdc++6 python3 libcurl4 && \
@@ -66,7 +66,7 @@ COPY --from=builder /usr/local/bin/lash /usr/local/bin/lash
 COPY --from=builder /opt/lash/modes /opt/lash/modes
 COPY --from=builder /usr/local/bin/tptp4X /usr/local/bin/tptp4X
 
-# ── fof2thf: type-promotion script (Python) ───────────────────────────────────
+# fof2thf: type-promotion script (Python)
 RUN printf '%s\n' '#!/usr/bin/env python3' \
     'import re,sys' \
     'A=re.compile(r"\b([a-z_][a-zA-Z0-9_]*)\s*\(")' \
@@ -89,7 +89,7 @@ RUN printf '%s\n' '#!/usr/bin/env python3' \
     'sys.stdout.write(c)' > /usr/local/bin/fof2thf
 RUN chmod +x /usr/local/bin/fof2thf
 
-# ── lash-wrapper: tptp4X normalize + fof2thf promote + lash solve ─────────────
+# lash-wrapper: tptp4X normalize + fof2thf promote + lash solve
 RUN printf '%s\n' '#!/bin/bash' \
     'set -Eeuo pipefail' \
     'ARGS=(); PROBLEM=""' \

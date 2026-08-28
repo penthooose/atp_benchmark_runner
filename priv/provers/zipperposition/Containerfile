@@ -5,9 +5,8 @@ FROM docker.io/ocaml/opam:ubuntu-22.04-ocaml-4.12 AS builder
 RUN sudo apt-get update && sudo apt-get install -y --no-install-recommends \
     ca-certificates git libgmp-dev m4 pkg-config python3 \
     && sudo rm -rf /var/lib/apt/lists/*
-# `opam update` is intentionally skipped — the image's pinned repo already
-# contains zipperposition 2.0/2.1, and a refresh pulls menhir >= 20211215 which
-# zipperposition excludes (< 20211215), breaking dependency resolution.
+# `opam update` is intentionally skipped: the pinned repo already contains
+# zipperposition 2.0/2.1, and a refresh pulls a menhir version it excludes.
 RUN opam install -y zipperposition
 RUN sudo cp $(opam var bin)/zipperposition /usr/local/bin/zipperposition
 
@@ -16,10 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgmp-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/bin/zipperposition /usr/local/bin/zipperposition
-# Zipperposition is a native OCaml binary that dlopen()s its C stub libraries
-# (dll*.so) at runtime via CAML_LD_LIBRARY_PATH. The opam switch path does not
-# exist in this plain-ubuntu runtime, so copy the stubs and point at them
-# (same fix as the Apptainer def).
+# zipperposition dlopen()s OCaml C stub libraries (dll*.so) at runtime; point
+# CAML_LD_LIBRARY_PATH at the copied stubs.
 COPY --from=builder /home/opam/.opam/4.12/lib/ocaml/stublibs/dll*.so /usr/local/lib/
 ENV CAML_LD_LIBRARY_PATH=/usr/local/lib
 ENTRYPOINT ["zipperposition"]

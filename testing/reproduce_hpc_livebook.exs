@@ -1,18 +1,12 @@
 # Reproduces `examples/benchmark_hpc.livemd` §1→§7 under `mix run` and collects
-# diagnostics for the Livebook-only failure:
+# diagnostics for the Livebook-only "Runtime terminated unexpectedly" failure.
+# Uploaded files are verified by checksum to separate cluster-side byte issues
+# from SSH/steady/runtime problems.
 #
-#     "Runtime terminated unexpectedly - no connection"
-#
-# Hypothesis under test: the HPC sync (which gained shot_tx recently) uploads
-# corrupted/malformed files, or makes too many/too-large SSH calls, and that is
-# what kills the Livebook embedded runtime. This script replicates every step
-# and verifies the uploaded files by checksum so we can tell the difference
-# between "bad bytes on the cluster" vs "SSH/steady/runtime issue".
-#
-# Run (default — sync + upload checksum-verify + submit smoke, quick):
+# Run (default: sync + upload checksum-verify + submit smoke, quick):
 #     mix run testing/reproduce_hpc_livebook.exs
 #
-# Run (exact §7 replica — full run_benchmark incl. wait + collect, LONG):
+# Run (exact §7 replica, full run_benchmark incl. wait + collect, LONG):
 #     $env:DIAG_FULL="true"; mix run testing/reproduce_hpc_livebook.exs
 
 defmodule DiagRepro do
@@ -84,7 +78,7 @@ defmodule DiagRepro do
     out = HpcConnect.connect!(session, cmd)
 
     if String.contains?(out, "__MD5_FAILED__") do
-      IO.puts("    ⚠ md5sum not available remotely — falling back to cksum")
+      IO.puts("    ⚠ md5sum not available remotely - falling back to cksum")
       fallback_cksum(session, root)
     else
       out
@@ -128,7 +122,7 @@ defmodule DiagRepro do
       Enum.map(set, fn {local, remote_path} ->
         name = Path.basename(remote_path)
         # Uploads are LF-normalized (CRLF is stripped), so normalize the local
-        # side the same way before comparing — a raw md5 of a Windows file with
+        # side the same way before comparing; a raw md5 of a Windows file with
         # CRLF endings would otherwise report a false mismatch.
         local_md5 = local |> File.read!() |> String.replace("\r\n", "\n") |> md5_hex()
 
@@ -147,9 +141,7 @@ defmodule DiagRepro do
   end
 end
 
-# ─────────────────────────────────────────────────────────────────────────────
 # §0 runtime / env header
-# ─────────────────────────────────────────────────────────────────────────────
 IO.puts("═" |> String.duplicate(72))
 IO.puts("HPC benchmark reproduction (mirrors examples/benchmark_hpc.livemd)")
 IO.puts("  Elixir #{System.version()}   OTP #{:erlang.system_info(:otp_release)}")
@@ -159,7 +151,7 @@ full? = System.get_env("DIAG_FULL") in ["true", "1", "yes"]
 extended? = System.get_env("DIAG_EXTENDED_DEBUG") in ["true", "1", "yes"]
 
 if full? do
-  IO.puts("  MODE: FULL (§7 exact replica — run_benchmark waits + collects; LONG)")
+  IO.puts("  MODE: FULL (§7 exact replica: run_benchmark waits + collects; LONG)")
 else
   IO.puts("  MODE: DIAG (sync + upload checksum-verify + submit smoke; quick)")
 end
@@ -170,9 +162,7 @@ end
 
 IO.puts("═" |> String.duplicate(72))
 
-# ─────────────────────────────────────────────────────────────────────────────
 # §1 configure paths from .env
-# ─────────────────────────────────────────────────────────────────────────────
 env_file = Path.expand("./.env", File.cwd!())
 AtpBenchmarkRunner.load_env!(env_file)
 
@@ -184,16 +174,14 @@ IO.puts(
   "  steady=#{System.get_env("HPC_CONNECT_STEADY_CONNECTION")} retry_forever=#{System.get_env("HPC_CONNECT_RETRY_FOREVER")}"
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
 # §2 bootstrap the HPC session
-# ─────────────────────────────────────────────────────────────────────────────
 boot =
   DiagRepro.step("§2 HpcConnect.bootstrap", fn ->
     HpcConnect.bootstrap(mode: :local, env_file: env_file)
   end)
 
 if match?({:error, _, _}, boot) do
-  IO.puts("FATAL: bootstrap failed — aborting")
+  IO.puts("FATAL: bootstrap failed - aborting")
   System.halt(1)
 end
 
@@ -201,9 +189,7 @@ session = boot.session
 IO.puts("\n  cluster=#{session.cluster.name} alias=#{session.ssh_alias} user=#{session.username}")
 IO.puts("  steady: #{DiagRepro.steady_state(session)}")
 
-# ─────────────────────────────────────────────────────────────────────────────
 # §2b/§3 provers + problems (same 14 as the notebook)
-# ─────────────────────────────────────────────────────────────────────────────
 selected_provers = [
   :tableaux,
   :shot_tx,
@@ -257,9 +243,7 @@ end
 
 IO.puts("\n  #{length(problems)} problems resolved")
 
-# ─────────────────────────────────────────────────────────────────────────────
 # §6 build the HPC plan (single-node sequential, same as notebook §6)
-# ─────────────────────────────────────────────────────────────────────────────
 plan =
   DiagRepro.step("§6 AtpBenchmarkRunner.bootstrap (plan)", fn ->
     AtpBenchmarkRunner.bootstrap(
@@ -289,9 +273,7 @@ hpc = plan.metadata[:hpc] || %{}
 remote_tptp_dir = hpc[:remote_tptp_dir]
 IO.puts("  remote_tptp_dir=#{inspect(remote_tptp_dir)}")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# §7a SYNC + upload checksum verification  (tests the malformed-upload hypothesis)
-# ─────────────────────────────────────────────────────────────────────────────
+# §7a SYNC + upload checksum verification
 sync_result =
   DiagRepro.step("§7a TPTPSync.sync_problem_set! (upload all 14 + conversions)", fn ->
     unless remote_tptp_dir do
@@ -307,7 +289,7 @@ IO.puts("\n  steady after sync: #{DiagRepro.steady_state(session)}")
 
 case sync_result do
   {:error, _, _} ->
-    IO.puts("  ✗ sync failed — cannot checksum-verify")
+    IO.puts("  ✗ sync failed - cannot checksum-verify")
 
   remote_problems ->
     DiagRepro.step("§7b checksum-verify uploads", fn ->
@@ -333,9 +315,7 @@ case sync_result do
     end)
 end
 
-# ─────────────────────────────────────────────────────────────────────────────
-# §7c submit smoke — replicates the sbatch submit without the 1h wait/collect
-# ─────────────────────────────────────────────────────────────────────────────
+# §7c submit smoke: replicates the sbatch submit without the wait/collect
 DiagRepro.step("§7c submit smoke (sbatch + scancel)", fn ->
   {out, status} =
     HpcConnect.SSH.exec(
@@ -356,16 +336,14 @@ DiagRepro.step("§7c submit smoke (sbatch + scancel)", fn ->
       {:submitted, job_id}
 
     :error ->
-      IO.puts("    ⚠ no job id — submit path may be broken")
+      IO.puts("    ⚠ no job id - submit path may be broken")
       {:error, out}
   end
 end)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# §7 exact replica (only with DIAG_FULL=true) — waits + collects (LONG)
-# ─────────────────────────────────────────────────────────────────────────────
+# §7 exact replica (only with DIAG_FULL=true): waits + collects (LONG)
 if full? do
-  IO.puts("\n[§7 FULL] run_benchmark(plan) — exact notebook replica (long)")
+  IO.puts("\n[§7 FULL] run_benchmark(plan): exact notebook replica (long)")
 
   {t_ms, results} =
     :timer.tc(fn ->
@@ -383,14 +361,12 @@ if full? do
     "\nBenchmark finished in #{Float.round(t_ms / 1_000_000, 2)}s, results=#{length(results)}"
   )
 else
-  IO.puts("\n(skipping §7 full run — set DIAG_FULL=true for the exact §7 replica)")
+  IO.puts("\n(skipping §7 full run; set DIAG_FULL=true for the exact §7 replica)")
 end
 
-# ─────────────────────────────────────────────────────────────────────────────
-# §7 quick full (DIAG_QUICK_FULL=true) — sync + submit + WAIT + COLLECT on a
-# reduced 2-problem set, so the wait/collect phase (not covered by DIAG mode)
-# is exercised end-to-end in ~1-2 min instead of ~1 h.
-# ─────────────────────────────────────────────────────────────────────────────
+# §7 quick full (DIAG_QUICK_FULL=true): sync + submit + WAIT + COLLECT on a
+# reduced 2-problem set, so the wait/collect phase is exercised end-to-end in
+# ~1-2 min instead of ~1 h.
 if System.get_env("DIAG_QUICK_FULL") in ["true", "1", "yes"] do
   IO.puts("\n[§7 QUICK-FULL] reduced run_benchmark (2 problems, wait+collect)")
 

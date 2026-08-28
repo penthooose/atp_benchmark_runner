@@ -15,7 +15,7 @@ IO.puts(
 
 IO.puts("")
 
-# Local temp file with CRLF endings (Windows) — must come back LF on the cluster.
+# Local temp file with CRLF endings (Windows); must come back LF on the cluster.
 local = Path.join(System.tmp_dir!(), "abr_upload_smoke_#{System.unique_integer([:positive])}.txt")
 File.write!(local, "line1\r\nline2\r\nline3\r\n")
 

@@ -1,5 +1,5 @@
 # Containerfile template for a TPTP-native ATP prover (local Docker builds).
-# Modeled on priv/provers/vampire/Containerfile — the simplest pattern: pull an
+# Modeled on priv/provers/vampire/Containerfile, the simplest pattern: pull an
 # upstream release binary. See docs/ADDING_A_PROVER.md.
 #
 #   docker build -t docker.io/aise/atp-<name>:latest priv/provers/<name>/
@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Fetch/build the prover here. Prefer an upstream release binary (curl a
-# tarball/zip and install it); otherwise build from source — mirror the
+# tarball/zip and install it); otherwise build from source: mirror the
 # %post steps in apptainer.def so both images stay in sync.
 RUN set -eux; \
     curl -fsSL "<SOURCE_URL>" -o /tmp/prover.bin; \

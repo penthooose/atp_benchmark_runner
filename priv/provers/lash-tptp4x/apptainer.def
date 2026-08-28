@@ -20,8 +20,8 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     export https_proxy="$HTTPS_PROXY"
     export no_proxy="$NO_PROXY"
 
-    # ── Build Lash ──────────────────────────────────────────────────────────
-    # zlib from source (needed by minisat dependency in lash)
+    # Build lash
+    # zlib from source (needed by lash's bundled MiniSat).
     cd /tmp && \
     curl -fSL "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz" -o zlib.tar.gz && \
     tar -xzf zlib.tar.gz && \
@@ -66,8 +66,8 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     install -m 0755 "$candidate" /usr/local/bin/lash
     /usr/local/bin/lash --help >/dev/null 2>&1 || true
 
-    # ── Build tptp4X (with JJParser) ────────────────────────────────────────
-    # Compile minimal libcurl from source (no SSL) — apt-get may fail on
+    # Build tptp4X (with JJParser)
+    # Minimal static libcurl (no SSL) from source: apt-get may fail on
     # apptainer builds without --fakeroot on HPC clusters.
     cd /tmp && \
     curl -fSL "https://curl.se/download/curl-8.12.1.tar.gz" -o curl.tar.gz && \
@@ -84,18 +84,17 @@ From: ocaml/opam:ubuntu-22.04-ocaml-4.12
     hash -r && \
     cd / && rm -rf /tmp/curl-8.12.1 /tmp/curl.tar.gz
 
-    # git and ca-certificates are only needed for cloning; already available
     rm -rf /tmp/JJParser /tmp/tptp4X
     git clone https://github.com/TPTPWorld/JJParser.git /tmp/JJParser
     git clone https://github.com/TPTPWorld/TPTP4X.git /tmp/tptp4X
     cd /tmp/tptp4X
-    # JJParser symlink (../JJParser) resolves to sibling directory
-    # Makefile handles -DTPTP_HOME quoting when TPTP_HOME is a make variable
+    # JJParser resolves as a sibling-directory symlink (../JJParser); the
+    # Makefile handles -DTPTP_HOME quoting when TPTP_HOME is a make variable.
     TPTP_HOME=/usr/local make CC=gcc LFLAGS="-L/usr/local/lib -lcurl -lz -lm"
     install -m 0755 tptp4X /usr/local/bin/tptp4X
     rm -rf /tmp/tptp4X /tmp/JJParser
 
-    # ── fof2thf: type-promotion script (pure bash) ─────────────────────────
+    # fof2thf: type-promotion script (pure bash)
     cat > /usr/local/bin/fof2thf << 'F2T'
 #!/bin/bash
 # Reads TPTP from stdin, promotes FOF/CNF/TFF to THF with type declarations.
@@ -136,7 +135,7 @@ fi
 F2T
     chmod +x /usr/local/bin/fof2thf
 
-    # ── lash-wrapper ─────────────────────────────────────────────────────────
+    # lash-wrapper
     cat > /usr/local/bin/lash-wrapper << 'SCRIPT'
 #!/bin/bash
 set -Eeuo pipefail
@@ -176,6 +175,6 @@ SCRIPT
     exec lash-wrapper "$@"
 
 %help
-    Lash + tptp4X variant — supports all TPTP formats.
+    Lash + tptp4X variant: supports all TPTP formats.
     Uses tptp4X (with JJParser) for TPTP normalization, then fof2thf
     for FOF/CNF/TFF → THF type promotion.
