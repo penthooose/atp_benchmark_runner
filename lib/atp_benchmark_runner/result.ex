@@ -98,10 +98,10 @@ defmodule AtpBenchmarkRunner.Result do
   @doc """
   Extracts an SZS status from output using a prover's declared parser.
 
-    * `:szs` — standard SZS status extraction (default)
-    * `:smt_bare` — bare SMT-LIB `sat`/`unsat`/`unknown` answer, falling back
+    * `:szs` - standard SZS status extraction (default)
+    * `:smt_bare` - bare SMT-LIB `sat`/`unsat`/`unknown` answer, falling back
       to SZS extraction (cvc5 in SMT-LIB mode)
-    * `{:custom, Mod}` — `Mod.parse/1`, falling back to SZS extraction
+    * `{:custom, Mod}` - `Mod.parse/1`, falling back to SZS extraction
   """
   @spec parse_for(atom() | tuple(), binary()) :: binary() | nil
   def parse_for(parser, output) when is_binary(output) do
@@ -132,8 +132,8 @@ defmodule AtpBenchmarkRunner.Result do
         Map.put_new(
           metadata,
           :reason,
-          "Prover produced no output — the problem type is not solvable " <>
-            "by this prover (e.g., no conjecture for a refutation prover)."
+          "Prover produced no output; the problem type is not solvable " <>
+            "by this prover (e.g. no conjecture for a refutation prover)."
         )
 
       Keyword.put(attrs, :metadata, metadata)
@@ -142,11 +142,11 @@ defmodule AtpBenchmarkRunner.Result do
     end
   end
 
-  # When the prover process exited normally (exit code 0) but the SZS status
-  # is "Timeout", it means the prover ran through all its strategies without
-  # finding a proof. This is not a real timeout — the problem type is not
-  # solvable by this prover (e.g., no conjecture for a refutation prover).
-  # Report as UnsupportedLogic instead of misleading "Timeout" or "GaveUp".
+  # When the prover exited normally (code 0) but the SZS status is "Timeout",
+  # it ran through all its strategies without finding a proof. That is not a
+  # real timeout; the problem type is just not solvable by this prover (e.g. no
+  # conjecture for a refutation prover), so report UnsupportedLogic instead of a
+  # misleading "Timeout" or "GaveUp".
   defp refine_timeout_to_gaveup(attrs) do
     status = Keyword.get(attrs, :szs_status)
     exit_status = Keyword.get(attrs, :exit_status)
@@ -158,9 +158,9 @@ defmodule AtpBenchmarkRunner.Result do
         Map.put_new(
           metadata,
           :reason,
-          "Prover exited normally with status \"Timeout\" in output — " <>
+          "Prover exited normally with status \"Timeout\" in output; " <>
             "the problem type is not solvable by this prover " <>
-            "(e.g., no conjecture for a refutation prover)."
+            "(e.g. no conjecture for a refutation prover)."
         )
 
       attrs
@@ -212,8 +212,8 @@ defmodule AtpBenchmarkRunner.Result do
     end
   end
 
-  # Prefer a genuine plain-language answer over a fallback-appended status.
-  # The HPC job scripts append `% SZS status GaveUp` (or Timeout) when a prover
+  # Prefer a genuine plain-language answer over a fallback-appended status. The
+  # HPC job scripts append `% SZS status GaveUp` (or Timeout) when a prover
   # emits no explicit SZS line; SMT-LIB-style provers such as cvc5 print a bare
   # `sat`/`unsat`/`unknown` answer that must win over that appended line, and
   # the AISE tableaux solver reports `status: UNSAT` / `status: SAT`.
@@ -352,14 +352,14 @@ defmodule AtpBenchmarkRunner.Result do
   @doc """
   Returns a compact human-readable summary of a prover result.
 
-  Shows prover, problem, status, and wall time — no proof details.
+  Shows prover, problem, status, and wall time, with no proof details.
   For full output with proof snippets, use `explain_full/1`.
 
   ## Examples
 
       iex> result = %AtpBenchmarkRunner.Result{prover: :eprover, problem_id: "GRP001-0", szs_status: "Theorem", wall_time_ms: 812}
       iex> AtpBenchmarkRunner.Result.explain(result)
-      "[eprover] GRP001-0 — ✅ Solved (Theorem)\\n  Wall time: 812 ms\\n"
+      "[eprover] GRP001-0: ✅ Solved (Theorem)\n  Wall time: 812 ms\n"
   """
   @spec explain(t()) :: binary()
   def explain(%__MODULE__{} = result) do
@@ -368,7 +368,7 @@ defmodule AtpBenchmarkRunner.Result do
     time_str = format_time(result.wall_time_ms)
 
     """
-    [#{result.prover}] #{result.problem_id} — #{solved_label} (#{status})
+    "[#{result.prover}] #{result.problem_id}: #{solved_label} (#{status})"
       Wall time: #{time_str}
     """
   end
@@ -392,7 +392,7 @@ defmodule AtpBenchmarkRunner.Result do
     proof = extract_proof(result)
 
     summary = """
-    [#{result.prover}] #{result.problem_id} — #{solved_label} (#{status})
+    [#{result.prover}] #{result.problem_id}: #{solved_label} (#{status})
       Wall time: #{time_str}
     """
 
@@ -454,7 +454,7 @@ defmodule AtpBenchmarkRunner.Result do
           IO.puts(String.slice(result.raw_output, 0, 500))
 
         true ->
-          IO.puts("#{problem_id} / #{prover}: #{result.szs_status || "?"} — no proof available.")
+          IO.puts("#{problem_id} / #{prover}: #{result.szs_status || "?"}; no proof available.")
           IO.puts("Raw output first 500 chars:")
           IO.puts(String.slice(result.raw_output, 0, 500))
       end

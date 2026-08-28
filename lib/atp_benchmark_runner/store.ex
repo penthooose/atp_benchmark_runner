@@ -53,7 +53,7 @@ defmodule AtpBenchmarkRunner.Store do
   @doc """
   Loads a run manifest by run id (e.g. `"run_20260827_155553_1028"`).
 
-  Accepts either a run id — mapped to `<id>.run.json` in the store — or an
+  Accepts either a run id (mapped to `<id>.run.json` in the store) or an
   existing full path ending in `.run.json`. Raises an `ArgumentError` if no
   matching manifest exists.
 
@@ -255,7 +255,7 @@ defmodule AtpBenchmarkRunner.Store do
   @git_commit_key {__MODULE__, :git_commit}
 
   # Runs `git rev-parse` at most once per node (cached in :persistent_term), so
-  # the hot save path never re-spawns an external process on Windows — repeated
+  # the hot save path never re-spawns an external process on Windows. Repeated
   # `System.cmd` spawns while a steady-shell Port is active can wedge the
   # embedded runtime node (observed as a hard freeze right after submit).
   defp git_commit(dir) do

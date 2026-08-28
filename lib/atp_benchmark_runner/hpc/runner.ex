@@ -30,19 +30,19 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
 
   ## Options
 
-    * `:hpc_mode` — Execution mode: `:single_node` or `:multi_node` (default: `:single_node`)
-    * `:timeout_seconds` — Per-problem wall time limit (default: 60)
-    * `:partition` — SLURM partition to use (default: from session config)
-    * `:time` — Wall time limit per job (default: "01:00:00")
-    * `:include_raw_output` — Include full stdout in results (default: false)
+    * `:hpc_mode` - Execution mode: `:single_node` or `:multi_node` (default: `:single_node`)
+    * `:timeout_seconds` - Per-problem wall time limit (default: 60)
+    * `:partition` - SLURM partition to use (default: from session config)
+    * `:time` - Wall time limit per job (default: "01:00:00")
+    * `:include_raw_output` - Include full stdout in results (default: false)
 
   ## Returns
 
   A map with:
 
-    * `:results` — List of `Result` structs
-    * `:job_ids` — Map of prover → SLURM job ID
-    * `:run` — The `Run` manifest
+    * `:results` - List of `Result` structs
+    * `:job_ids` - Map of prover to SLURM job ID
+    * `:run` - The `Run` manifest
   """
   @spec bootstrap(
           HpcConnect.Session.t(),
@@ -72,17 +72,17 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
 
     if session.extended_debug do
       IO.puts(
-        "[hpc-ext-debug] #{stamp()} run #{run.id} — mode=#{hpc.hpc_mode} " <>
+        "[hpc-ext-debug] #{stamp()} run #{run.id}: mode=#{hpc.hpc_mode} " <>
           "provers=#{length(run.provers)} problems=#{length(run.problems)} partition=#{hpc.partition}"
       )
     end
 
     # Persist the plan immediately so the run_id is discoverable in the store
-    # even if a later step (sync/submit) fails. If submission succeeds, the
-    # manifest is re-persisted below with :submitted status + job ids.
+    # even if a later step (sync/submit) fails. On success the manifest is
+    # re-persisted below with :submitted status and job ids.
     case persist_run_manifest(run) do
       nil -> :ok
-      path -> IO.puts("[runner] Run #{run.id} starting — manifest: #{path}")
+      path -> IO.puts("[runner] Run #{run.id} starting; manifest: #{path}")
     end
 
     remote_run =
@@ -158,7 +158,7 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
       |> Enum.map(&(Map.get(&1, :job_id) || Map.get(&1, "job_id")))
       |> Enum.join(", ")
 
-    IO.puts("[runner] Jobs submitted — IDs: #{job_ids_str}")
+    IO.puts("[runner] Jobs submitted; IDs: #{job_ids_str}")
 
     persist_run_manifest(submitted_run)
     wait_for_completion!(session, submitted_run, hpc)
@@ -177,8 +177,8 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
       end
 
     # Auto-kill: explicitly cancel job arrays so SLURM releases resources
-    # immediately, even for jobs that already reached a terminal state.
-    # Wrap in try/rescue — SSH disruption during cleanup should not crash results.
+    # immediately, even for jobs that already reached a terminal state. Wrapped
+    # in try/rescue so SSH disruption during cleanup never crashes results.
     try do
       Submitter.cancel_run(session, submitted_run)
     rescue
@@ -217,10 +217,10 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
       paths.single_node_tasks,
       JobScript.single_node_tasks(run),
       mode: "644",
-      # Over the steady shell, deliver the tasks file as ONE command instead of
-      # several rapid base64-chunk writes. The steady shell has no Windows
-      # process-spawn limit (it pipes via stdin), and collapsing the burst of
-      # writes into a single call avoids destabilising the Livebook runtime.
+      # Over the steady shell, deliver the tasks file as one command instead of
+      # several rapid base64-chunk writes. The steady shell pipes via stdin with
+      # no Windows process-spawn limit, and collapsing the write burst avoids
+      # destabilising the Livebook runtime.
       single_command: session.steady_connection == true
     )
 
@@ -248,15 +248,15 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
           debug: hpc.debug
         ],
         # The benchmark job is a short-lived batch job, not a long-running app:
-        # return immediately with the job_id (no allocation wait). This lets the
-        # runner persist the submitted manifest right after `sbatch`, so even if
-        # the Livebook runtime later dies during polling, the run is recorded as
-        # submitted and §7b (`collect_last_hpc_results!`) can recover it. The
-        # actual completion wait is done below by `wait_for_completion!`.
+        # return immediately with the job_id (no allocation wait) so the
+        # manifest is persisted right after `sbatch`. Even if the Livebook
+        # runtime later dies during polling, the run stays recorded as
+        # submitted and `collect_last_hpc_results!` can recover it. The actual
+        # completion wait happens below via `wait_for_completion!`.
         wait_for_node: false
       )
 
-    IO.puts("[runner] Job submitted — ID: #{submitted.job_id}")
+    IO.puts("[runner] Job submitted; ID: #{submitted.job_id}")
 
     submitted_run =
       run
@@ -315,16 +315,14 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
     end
   end
 
-  # Persists the run manifest to the local store so the run_id is discoverable
-  # and its results can be resumed later (e.g. after a transient SSH failure)
-  # without re-running. Called at run start (plan record) and right after a
-  # successful submission (with :submitted status + job ids).
+  # Persists the run manifest to the local store so the run_id stays discoverable
+  # and results can be resumed later without re-running. Called at run start
+  # (plan record) and right after a successful submission.
   #
-  # Bounded and non-fatal: on this Windows + Livebook-embedded-runtime setup a
-  # persistence write right after submit can freeze the node, so the write runs
-  # in a Task with a 15 s cap. If it does not finish, we log and continue — the
-  # submitted status is a convenience, and results stay recoverable via
-  # `collect_hpc_results!` / `collect_last_hpc_results!` remote discovery.
+  # Bounded and non-fatal: on this Windows + Livebook setup a write right after
+  # submit can freeze the node, so it runs in a Task with a 15 s cap. If it does
+  # not finish, we log and continue. The submitted status is a convenience;
+  # results stay recoverable via `collect_hpc_results!` remote discovery.
   defp persist_run_manifest(%Run{} = run, opts \\ []) do
     task = Task.async(fn -> Store.save_run!(run, opts) end)
 
@@ -334,7 +332,7 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
 
       nil ->
         IO.puts(
-          "[runner] ⚠ Could not persist run manifest #{run.id} within 15s — " <>
+          "[runner] ⚠ Could not persist run manifest #{run.id} within 15s; " <>
             "skipped (non-fatal, results still recoverable via §7b)"
         )
 
@@ -359,7 +357,7 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
     end
 
     # Pre-convert problems for provers whose `input` is not `:tptp`
-    # (cvc5 → SMT, lash → THF). Must happen before syncing because the
+    # (cvc5 to SMT, lash to THF). Must happen before syncing because the
     # converted files are uploaded to the vault alongside the originals.
     Enum.each(run.provers, fn prover ->
       if Input.needs_conversion?(prover) do
@@ -368,7 +366,7 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
                (String.ends_with?(problem.path, ".p") and
                   not String.ends_with?(problem.path, "_thf.p")) do
             # A conversion failure for one problem must not abort the whole
-            # run — skip it so the problem surfaces as a visible GaveUp
+            # run, so skip it and let the problem surface as a visible GaveUp
             # instead of killing every prover.
             try do
               Input.convert_problem(prover, problem)
@@ -427,7 +425,7 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
 
     cond do
       states == %{} ->
-        IO.puts("[runner] No active jobs found — assuming completed")
+        IO.puts("[runner] No active jobs found; assuming completed")
         :ok
 
       states == :error ->
@@ -447,7 +445,7 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
         do_wait_for_completion(session, run, hpc, deadline, failed_count + 1, poll_count)
 
       Enum.all?(states, fn {_job_id, state} -> Config.terminal_state?(state) end) ->
-        IO.puts("[runner] All jobs completed — states: #{inspect(states)}")
+        IO.puts("[runner] All jobs completed; states: #{inspect(states)}")
         :ok
 
       System.monotonic_time(:millisecond) >= deadline ->
@@ -458,7 +456,7 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
         # Print progress every 5th poll
         if rem(poll_count, 5) == 0 do
           IO.puts(
-            "[runner] Waiting for completion (poll ##{poll_count + 1}) — states: #{inspect(states)}"
+            "[runner] Waiting for completion (poll ##{poll_count + 1}); states: #{inspect(states)}"
           )
         end
 

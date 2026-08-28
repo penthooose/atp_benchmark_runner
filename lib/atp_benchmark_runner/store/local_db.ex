@@ -15,8 +15,8 @@ defmodule AtpBenchmarkRunner.Store.LocalDb do
   @doc """
   Unique DETS table name per database path.
 
-  DETS uses a global name registry — same name, different file = silent
-  cross-talk. We hash the path to keep tables isolated.
+  DETS uses a global name registry, so the same name with a different file
+  means silent cross-talk. The path is hashed to keep tables isolated.
   """
   @spec table_name(binary()) :: atom()
   def table_name(db_path) when is_binary(db_path) do

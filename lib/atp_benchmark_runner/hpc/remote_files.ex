@@ -82,7 +82,7 @@ defmodule AtpBenchmarkRunner.HPC.RemoteFiles do
 
     cond do
       byte_size(b64) <= @max_base64_per_call ->
-        # Small payload – single call, matches previous behaviour.
+        # Small payload: single call, matches previous behaviour.
         HpcConnect.connect!(
           session,
           JobScript.write_file_command(remote_path, content, mode: mode),
@@ -114,7 +114,7 @@ defmodule AtpBenchmarkRunner.HPC.RemoteFiles do
 
   @doc """
   Uploads a local text file to `remote_path` by streaming it as base64 over the
-  SSH session (routed through the steady shell when enabled) — **no `scp`**, so
+  SSH session (routed through the steady shell when enabled), with no `scp`, so
   uploads never open a fresh per-file connection that can trip the gateway rate
   limiter. CRLF is normalized to LF and large files are chunked into several
   small SSH calls.
@@ -135,10 +135,10 @@ defmodule AtpBenchmarkRunner.HPC.RemoteFiles do
   commands (batched base64, routed through the steady shell when enabled).
 
   `files` is a list of `{local_path, remote_path}`. All writes are grouped into
-  a handful of `connect!` calls instead of one per file — the benchmark sync
+  a handful of `connect!` calls instead of one per file. The benchmark sync
   phase is the main source of the SSH-call burst that trips the csnhr gateway
-  rate limiter (dozens of fresh connections in a short window → `Connection
-  refused` for the whole user). CRLF is normalized to LF per file.
+  rate limiter (dozens of fresh connections in a short window can cause
+  `Connection refused` for the whole user). CRLF is normalized to LF per file.
   """
   @spec upload_files!(HpcConnect.Session.t(), [{binary(), binary()}], keyword()) :: :ok
   def upload_files!(%HpcConnect.Session{} = session, files, opts \\ []) do

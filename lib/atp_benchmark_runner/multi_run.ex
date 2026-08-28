@@ -6,14 +6,14 @@ defmodule AtpBenchmarkRunner.MultiRun do
   (problem, prover) pair across runs, and renders:
 
     * a per-problem × prover **best-time matrix** (with solved status),
-    * a per-problem × prover **time-range matrix** (min–max ms across runs),
+    * a per-problem × prover **time-range matrix** (min-max ms across runs),
     * a **prover ranking** by solved problems.
 
-  By design the results stay in JSON files (no database yet — columns may still
+  By design the results stay in JSON files (no database yet, columns may still
   change during development). Ranking treats statuses such as `InputError`,
   `TypeError`, `UnsupportedLogic` and `Error` as *non-attempts* by default
   (the prover was not applicable to that problem), while `Timeout`/`GaveUp`
-  always count as real attempts — see `exclude_statuses/1` and the
+  always count as real attempts. See `exclude_statuses/1` and the
   `:exclude_statuses` option.
 
   ## Examples
@@ -29,8 +29,8 @@ defmodule AtpBenchmarkRunner.MultiRun do
   alias AtpBenchmarkRunner.{Result, Store}
 
   # Statuses that indicate the prover never made a real attempt (wrong input
-  # dialect / logic the prover does not support), so they should not count as
-  # attempted problems in the ranking. Timeouts are deliberately NOT excluded.
+  # dialect or unsupported logic), so they do not count as attempted problems
+  # in the ranking. Timeouts are deliberately not excluded.
   @default_exclude_statuses ["InputError", "UnsupportedLogic", "TypeError", "Error"]
 
   @doc """
@@ -69,11 +69,11 @@ defmodule AtpBenchmarkRunner.MultiRun do
 
   Options:
 
-    * `:dir` — store directory to read when `runs` is `nil`
+    * `:dir` - store directory to read when `runs` is `nil`
       (default: `Store.default_dir/0`)
-    * `:exclude_statuses` — statuses treated as non-attempts in the ranking
+    * `:exclude_statuses` - statuses treated as non-attempts in the ranking
       (default: `default_exclude_statuses/0`); timeouts are never excluded
-    * `:only_common_problems` — when `true`, the ranking only counts problems
+    * `:only_common_problems` - when `true`, the ranking only counts problems
       that every prover in scope attempted, so provers are compared on the
       same problem set
 
@@ -116,7 +116,7 @@ defmodule AtpBenchmarkRunner.MultiRun do
 
         Enum.map(per_prover, fn p ->
           # Every prover has a cell for every common problem (by construction),
-          # so `attempted` is the full shared set — even non-applicable statuses
+          # so `attempted` is the full shared set. Even non-applicable statuses
           # (e.g. InputError) count here, keeping all provers on the same set.
           attempted = length(common)
           solved = Enum.count(common, &Map.get(p.by_problem, &1, false))
@@ -169,11 +169,11 @@ defmodule AtpBenchmarkRunner.MultiRun do
 
     runs_block =
       if stats.runs == [] do
-        "  _(no runs found — nothing to compare)_"
+        "  _(no runs found; nothing to compare)_"
       else
         stats.runs
         |> Enum.map_join("\n", fn r ->
-          "  - `#{r.run_id}` — #{r.saved_at || "?"}, #{r.n_results} results" <>
+          "  - `#{r.run_id}`: #{r.saved_at || "?"}, #{r.n_results} results" <>
             " (provers: #{Enum.join(r.provers, ", ")})"
         end)
       end
@@ -196,11 +196,11 @@ defmodule AtpBenchmarkRunner.MultiRun do
       "|--------|----------:|-------:|-----:|-----------------:|---------:|---------:|---------:|",
       Enum.map_join(stats.ranking, "\n", &rank_row/1),
       "",
-      "## Per-problem × prover — best time & status",
+      "## Per-problem × prover: best time & status",
       "",
       matrix_table(stats, &best_cell/1),
       "",
-      "## Per-problem × prover — time range (min–max ms)",
+      "## Per-problem × prover: time range (min-max ms)",
       "",
       matrix_table(stats, &range_cell/1)
     ]
@@ -247,7 +247,7 @@ defmodule AtpBenchmarkRunner.MultiRun do
   @spec available?() :: boolean()
   def available?, do: kino_available?()
 
-  # ── loading ──────────────────────────────────────────────────────────────
+  # loading
 
   defp load_run(path) do
     with {:ok, contents} <- File.read(path),
@@ -258,7 +258,7 @@ defmodule AtpBenchmarkRunner.MultiRun do
       parsed =
         Enum.flat_map(results, fn entry ->
           try do
-            # Comparison statistics only need status/timing fields — drop the
+            # Comparison statistics only need status/timing fields, so drop the
             # (potentially huge) raw proof output to keep loading fast.
             [%{Result.from_map(entry) | raw_output: nil}]
           rescue
@@ -311,7 +311,7 @@ defmodule AtpBenchmarkRunner.MultiRun do
     end)
   end
 
-  # ── aggregation ──────────────────────────────────────────────────────────
+  # aggregation
 
   defp build_cell(records, exclude_set) do
     attempted = Enum.any?(records, &valid_attempt?(&1.status, exclude_set))
@@ -374,7 +374,7 @@ defmodule AtpBenchmarkRunner.MultiRun do
   defp valid_attempt?(status, exclude_set),
     do: not MapSet.member?(exclude_set, status)
 
-  # ── rendering ────────────────────────────────────────────────────────────
+  # rendering
 
   defp matrix_table(stats, cell_fun) do
     header =
@@ -407,7 +407,7 @@ defmodule AtpBenchmarkRunner.MultiRun do
         if cell.min_ms == cell.max_ms do
           "#{cell.min_ms}ms"
         else
-          "#{cell.min_ms}–#{cell.max_ms}ms"
+          "#{cell.min_ms}-#{cell.max_ms}ms"
         end
 
       cell.min_ms != nil ->

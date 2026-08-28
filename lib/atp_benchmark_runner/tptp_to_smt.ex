@@ -2,32 +2,24 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
   @moduledoc """
   Converts TPTP problem files (FOF/CNF/TFF/THF) to SMT-LIB 2.6.
 
-  cvc5 has no TPTP input dialect — its `--lang` option only accepts
-  `smt2`/`smtlib`, `smt2-tptp` and `sygus` — so problems must be converted to
-  SMT-LIB before they reach the container. This module is a real tokenizer plus
-  recursive-descent parser (not string surgery), so it handles quantified
-  first-order formulas, functions, predicates, equality and the common TPTP
-  connectives.
+  cvc5 has no TPTP input dialect (its `--lang` option only accepts
+  `smt2`/`smtlib`, `smt2-tptp` and `sygus`), so problems must be converted to
+  SMT-LIB before they reach the container. This is a real tokenizer plus
+  recursive-descent parser, so it handles quantified first-order formulas,
+  functions, predicates, equality and the common TPTP connectives.
 
   ## Design
 
     * TPTP individuals live in one uninterpreted sort `U`.
     * User symbols are prefixed with `tptp.` (matching cvc5's own converter) to
       avoid clashing with SMT-LIB reserved words.
-    * `$o`-typed quantified variables become `Bool`; everything else (untyped
-      FOF variables, `$i`) becomes `U`.
-    * A `conjecture` entry is asserted **negated** (a theorem is then `unsat`
-      on `check-sat`); `negated_conjecture` is asserted as-is; all other roles
-      are asserted directly.
-    * `type`-role declarations (`tff`/`thf` type lines) are skipped.
-
-  ## Usage
-
-      smt = AtpBenchmarkRunner.TPTPToSMT.convert_file!("problem.p")
-      File.write!("problem.smt2", smt)
+    * `$o`-typed quantified variables become `Bool`; everything else becomes `U`.
+    * A `conjecture` entry is asserted negated (a theorem is then `unsat` on
+      `check-sat`); `negated_conjecture` is asserted as-is.
+    * `type`-role declarations are skipped.
 
   Known limitation: higher-order `@`-application and `^`-lambda (rare in the
-  benchmark set) are not supported and raise `ArgumentError`; callers should
+  benchmark set) are unsupported and raise `ArgumentError`. Callers should
   handle that per-problem so one unsupported problem does not abort a run.
   """
 
@@ -52,8 +44,6 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
   @doc """
   Reads a TPTP file, converts to SMT-LIB, and writes it to the configured temp
   directory. Returns the path to the written `.smt2` file.
-
-  The temp directory is resolved via `Config.smt_tmp_dir/1`.
   """
   @spec convert_file_to_path!(binary(), keyword()) :: binary()
   def convert_file_to_path!(path, opts \\ []) when is_binary(path) do
@@ -79,8 +69,8 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
   end
 
   @doc """
-  Parses a TPTP problem string into AST entries. Public — reused by the THF
-  converter (`TPTP.ToTHF`) so it shares one tokenizer/parser. Each entry is
+  Parses a TPTP problem string into AST entries. Also used by the THF converter
+  (`TPTP.ToTHF`) so both share one tokenizer/parser. Each entry is
   `%{type, name, role, ast}`; `type`-role declarations and unparseable
   entries are skipped.
   """
@@ -113,8 +103,8 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
 
   @doc """
   Closes free variables with an implicit universal quantifier (TPTP CNF/FOF
-  semantics — a bare `cnf(..., (p(X)))` clause's `X` is universally
-  quantified). Returns a new AST with the free variables wrapped in `forall`.
+  semantics: a bare `cnf(..., (p(X)))` clause's `X` is universally quantified).
+  Returns a new AST with the free variables wrapped in `forall`.
   """
   @spec close_free_vars!(term()) :: term()
   def close_free_vars!(ast) do
@@ -177,9 +167,9 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
   # Entry splitting
   # ---------------------------------------------------------------------------
 
-  # Split the token stream into TPTP entries at top-level "." (depth 0).
-  # Both round and square brackets count toward depth so commas inside
-  # `![X1, X2] :` var lists never split an entry.
+  # Split tokens into TPTP entries at top-level ".". Round and square brackets
+  # both count toward depth, so commas inside `![X1, X2] :` var lists never
+  # split an entry.
   defp parse_entries(tokens) do
     tokens
     |> split_entries()
@@ -230,8 +220,8 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
 
   defp parse_entry(_), do: []
 
-  # Parse a formula, returning :error on any raise (unsupported syntax) or on
-  # leftover tokens, so one malformed/unsupported entry never aborts a run.
+  # Parse a formula, returning :error on unsupported syntax or leftover tokens
+  # so one bad entry never aborts a run.
   defp parse_safely(tokens) do
     case parse_formula(tokens) do
       {ast, []} -> {:ok, ast}
@@ -582,7 +572,7 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
 
   # TPTP semantics: free variables are implicitly universally quantified (this
   # is what makes bare CNF clauses such as `cnf(f01, axiom, (mult(X1,...)=...))`
-  # legal — without closure their X1/X2 would be undeclared in SMT-LIB).
+  # legal; without closure their X1/X2 would be undeclared in SMT-LIB).
   defp close_vars(ast) do
     case free_vars(ast) do
       [] -> ast
@@ -590,9 +580,9 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
     end
   end
 
-  # Bottom-up free-variable computation: free(∀x.F) = free(F) \ {x}. A single
-  # accumulator would mix bound and free names (a bound var is put into the set
-  # and then reported as "free"), so each subtree returns its own free set.
+  # Bottom-up free-variable computation: free(∀x.F) = free(F) \ {x}. Each
+  # subtree returns its own free set, otherwise a single accumulator would mix
+  # bound and free names.
   defp free_vars(ast) do
     ast
     |> do_free_vars()
@@ -680,8 +670,8 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
   # Signature collection
   # ---------------------------------------------------------------------------
 
-  # NOTE: do not pipe sig/acc through these — the function signatures are
-  # (ast, sig) / (term, sig), so the pipe would swap the arguments.
+  # Note: signatures are (ast, sig) / (term, sig), so do not pipe these
+  # functions, the pipe would swap the arguments.
   defp collect_sig({:forall, _, body}, sig), do: collect_sig(body, sig)
   defp collect_sig({:exists, _, body}, sig), do: collect_sig(body, sig)
   defp collect_sig({:not, f}, sig), do: collect_sig(f, sig)

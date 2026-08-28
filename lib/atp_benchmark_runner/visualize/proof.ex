@@ -3,8 +3,8 @@ defmodule AtpBenchmarkRunner.Visualize.Proof do
   Parses SZS proof/refutation blocks into a dependency graph that can be
   rendered as a Mermaid flowchart.
 
-  Machine-readable TPTP clause refutations — the `fof`/`cnf`/`tff`/`thf` steps
-  with `inference(...)` annotations emitted by E, Vampire and similar provers —
+  Machine-readable TPTP clause refutations (the `fof`/`cnf`/`tff`/`thf` steps
+  with `inference(...)` annotations emitted by E, Vampire and similar provers)
   are parsed into `%{steps, edges, root}`. Proof formats that do not follow
   that shape (e.g. prose or LaTeX-style output) are reported as `{:error, _}`
   so `Visualize.proof/2` can degrade gracefully to a pipeline diagram.
@@ -79,7 +79,7 @@ defmodule AtpBenchmarkRunner.Visualize.Proof do
   end
 
   # The clause is everything before the first `inference(...)`/`file(...)`
-  # annotation. Keep it short — Mermaid labels should stay readable.
+  # annotation. Keep it short, Mermaid labels should stay readable.
   defp clause_snippet(rest) do
     rest
     |> String.split(~r/,\s*(?:inference|file)\(/, parts: 2)

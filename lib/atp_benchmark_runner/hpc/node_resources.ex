@@ -53,17 +53,18 @@ defmodule AtpBenchmarkRunner.HPC.NodeResources do
     {cpus_per_task, mem_per_job} =
       case hpc_mode do
         :multi_node ->
-          # Each prover on its own node → full (or half) node resources per job
+          # Each prover on its own node, so each job gets full (or half) node
+          # resources.
           {nil, "#{available_ram}M"}
 
         :single_node ->
           case single_node_mode do
             :sequential ->
-              # One task at a time → each gets the full allocation
+              # One task at a time, so each gets the full allocation.
               {available_cpus, "#{available_ram}M"}
 
             :parallel ->
-              # Spread CPUs across concurrent tasks
+              # Spread CPUs across concurrent tasks.
               per_task = max(div(available_cpus, max_parallel), 1)
               per_task_ram = max(div(available_ram, max_parallel), 1)
               {per_task, "#{per_task_ram}M"}
@@ -73,7 +74,7 @@ defmodule AtpBenchmarkRunner.HPC.NodeResources do
     %{cpus_per_task: cpus_per_task, mem: mem_per_job}
   end
 
-  # ── private ────────────────────────────────────────────────────────────────
+  # private
 
   defp do_probe(session, opts) do
     cpu_result = probe_cpus(session, opts)

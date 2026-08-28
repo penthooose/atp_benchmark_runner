@@ -23,12 +23,12 @@ This notebook is the local counterpart to `benchmark_hpc.livemd`. It runs the
 same prover images (via Docker or Apptainer) and applies the same
 input preparation as on the cluster:
 
-* **`:cvc5`** — problems are converted to SMT-LIB (`TPTPToSMT`) before cvc5 sees
+- **`:cvc5`** - problems are converted to SMT-LIB (`TPTPToSMT`) before cvc5 sees
   them (cvc5 has no TPTP input dialect); its bare `sat`/`unsat`/`unknown` answer
   is mapped to an SZS status.
-* **`:lash`** — FOF/CNF/TFF problems are converted to THF (`TPTP.ToTHF`) because
+- **`:lash`** - FOF/CNF/TFF problems are converted to THF (`TPTP.ToTHF`) because
   lash is a THF-`$o`-only prover.
-* All other provers read the TPTP file directly.
+- All other provers read the TPTP file directly.
 
 ---
 
@@ -39,10 +39,10 @@ AtpBenchmarkRunner.LocalRunner.print_image_status_summary()
 ```
 
 > **Available provers:**
-> 
-> * **`:tableaux`** — uses the local escript (always available after `mix escript.build` in item #12)
-> * **`:eprover`**, **`:vampire`**, **`:cvc5`**, **`:zipperposition`**, **`:leo3`**, **`:leo2`**, **`:lash`** — run via Docker images built from their `Containerfile`s
-> 
+>
+> - **`:tableaux`** - uses the local escript (always available after `mix escript.build` in item #12)
+> - **`:eprover`**, **`:vampire`**, **`:cvc5`**, **`:zipperposition`**, **`:leo3`**, **`:leo2`**, **`:lash`** - run via Docker images built from their `Containerfile`s
+>
 > Native binaries of the reference provers are not distributed for Windows. The
 > Docker images are built from the same sources as the HPC Apptainer `.def`s, so
 > results are directly comparable with the cluster.
@@ -359,7 +359,7 @@ target =
 if target do
   IO.puts(AtpBenchmarkRunner.Visualize.markdown(AtpBenchmarkRunner.Visualize.proof(target)))
 else
-  IO.puts("No parseable proof — nothing to show.")
+  IO.puts("No parseable proof; nothing to show.")
 end
 ```
 

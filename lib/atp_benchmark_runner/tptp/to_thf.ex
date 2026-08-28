@@ -21,7 +21,7 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
 
   alias AtpBenchmarkRunner.TPTPToSMT
 
-  # ── Public API ────────────────────────────────────────────────────────────
+  # Public API
 
   @doc """
   Converts a TPTP problem string to THF. Returns converted string.
@@ -32,8 +32,8 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
     entries = TPTPToSMT.parse_string!(content)
 
     if entries == [] do
-      # Parser could not handle this problem (e.g. exotic higher-order syntax).
-      # Fall back to a minimal rename so we never emit an empty problem.
+      # Parser could not handle this problem (e.g. exotic higher-order syntax),
+      # so fall back to a minimal rename to never emit an empty problem.
       legacy_fallback(content, header)
     else
       {sig, bvars} = TPTPToSMT.collect_signature!(entries)
@@ -64,8 +64,8 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
   end
 
   @doc """
-  Returns the path to a THF-converted problem for Lash. Always converts —
-  even already-THF problems need the Lash-safe emission (explicit `@` and
+  Returns the path to a THF-converted problem for Lash. Always converts, even
+  already-THF problems need the Lash-safe emission (explicit `@` and
   parenthesized equations), so the old "copy if already THF" shortcut is gone.
   """
   @spec ensure_thf(binary(), atom(), keyword()) :: binary()
@@ -91,7 +91,7 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
     not String.match?(content, ~r/^% SPC.*THF/m)
   end
 
-  # ── Header ────────────────────────────────────────────────────────────────
+  # Header
 
   defp split_header(lines) do
     Enum.split_while(lines, &(String.starts_with?(&1, "%") or String.trim(&1) == ""))
@@ -103,12 +103,12 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
     end)
   end
 
-  # ── Entry / formula emission ──────────────────────────────────────────────
+  # Entry / formula emission
 
-  # Lash does not accept the TPTP `negated_conjecture` role. In THF, an
-  # Unsatisfiable problem's negated-conjecture clause `¬C` must be negated and
-  # re-issued as the `conjecture` goal C (Lash refutes {axioms, ¬C}). Must be
-  # declared before the generic `role:` clause below.
+  # Lash rejects the TPTP `negated_conjecture` role. In THF, an Unsatisfiable
+  # problem's negated-conjecture clause `¬C` must be negated and re-issued as
+  # the `conjecture` goal C (Lash refutes {axioms, ¬C}). Keep this clause before
+  # the generic `role:` clause below.
   defp emit_entry(%{name: name, role: "negated_conjecture", ast: ast}, bvars) do
     ast = TPTPToSMT.close_free_vars!(ast)
     "thf(#{name}, conjecture, #{emit_formula(negate(ast), bvars)})."
@@ -169,22 +169,22 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
   defp emit_term({:app, name, args}),
     do: "(#{name} @ #{Enum.map_join(args, " @ ", &emit_term/1)})"
 
-  # ── Type declarations ─────────────────────────────────────────────────────
+  # Type declarations
 
   # Preserve explicit `thf(NAME, type, (SYM: TYPE)).` declarations from
-  # already-THF problems (extracted by regex — the tokenizer drops the `>` of
-  # arrow types). Otherwise types are inferred from the shared parser's
-  # signature (preds → `$o`, funcs/consts → `$i`).
+  # already-THF problems (extracted by regex, since the tokenizer drops the `>`
+  # of arrow types). Otherwise types come from the shared parser's signature
+  # (preds -> `$o`, funcs/consts -> `$i`).
   defp extract_explicit_types(content) do
     ~r/thf\(\s*[A-Za-z0-9_]+\s*,\s*type\s*,\s*\(\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*:\s*([^)]+)\)\s*\)\s*\./
     |> Regex.scan(content)
     |> Enum.reduce(%{}, fn [_, sym, typ], acc -> Map.put(acc, sym, String.trim(typ)) end)
   end
 
-  # Types are inferred from the shared parser's signature (preds → `$o`,
-  # funcs/consts → `$i`). `$o`-quantified variables (bvars) are excluded —
-  # declaring e.g. `thf(tp_P, type, (P: $o)).` while also binding `![P: $o]`
-  # is a name clash that Lash rejects.
+  # Types come from the shared parser's signature (preds -> `$o`, funcs/consts
+  # -> `$i`). `$o`-quantified variables (bvars) are excluded: declaring
+  # `thf(tp_P, type, (P: $o)).` while also binding `![P: $o]` is a name clash
+  # that Lash rejects.
   defp generate_types(sig, explicit, bvars) do
     (Map.keys(sig.preds) ++ Map.keys(sig.funcs))
     |> Enum.uniq()
@@ -208,10 +208,10 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
   defp func_type(0), do: "$i"
   defp func_type(arity), do: (List.duplicate("$i >", arity) |> Enum.join(" ")) <> " $i"
 
-  # ── Minimal fallback ──────────────────────────────────────────────────────
+  # Minimal fallback
 
   # If the parser could not handle a problem at all (e.g. exotic higher-order
-  # syntax), fall back to a bare `fof`/`cnf`/`tff` → `thf` rename rather than
+  # syntax), fall back to a bare `fof`/`cnf`/`tff` to `thf` rename rather than
   # emitting an empty problem.
   defp legacy_fallback(content, header) do
     body =

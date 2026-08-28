@@ -32,7 +32,7 @@ System.put_env("TPTP_ROOT", "./tmp/tptp")
 # Or download the official archive (~881MB) straight from Livebook:
 AtpBenchmarkRunner.ensure_tptp_archive(root_dir: "./tmp/tptp")
 
-# Pick problems by name — resolved from user dir, bundled, or archive
+# Pick problems by name (user dir, bundled, or archive)
 problems = AtpBenchmarkRunner.select_problems([
   "GRP001-0.p", "LAT001+0.p", "Problems/REL/REL001+0.p"
 ])
@@ -94,14 +94,14 @@ AtpBenchmarkRunner.smoke_validate_images!(session, run.provers)
 
 Three ways to get problem files:
 
-**1. Drop files into the user examples dir** — `<tptp_dir>/user_examples/`. Highest priority,
+**1. Drop files into the user examples dir** (`<tptp_dir>/user_examples/`). Highest priority,
 checked before everything else. Overrides same-named files from the archive or bundled
 examples. Just put your `.p` or `.ax` files there.
 
-**2. Bundled smoke examples** — `priv/tptp_examples/`. Auto-copied to `./tmp/tptp_examples/`
+**2. Bundled smoke examples** (`priv/tptp_examples/`). Auto-copied to `./tmp/tptp_examples/`
 on first use. 12 tiny problems across CNF, FOF and THF, good for quick smoke tests.
 
-**3. Full TPTP archive** — download and extract the official distribution from tptp.org
+**3. Full TPTP archive**: download and extract the official distribution from tptp.org
 (large, opt-in). Installed under `<tptp_dir>/TPTP-v9.2.1/`.
 
 Important env vars:
@@ -116,7 +116,7 @@ Important env vars:
 Picking problems by name:
 
 ```elixir
-# Bare filenames — resolved from user dir, bundled tmp, or archive index
+# Bare filenames (user dir, bundled tmp, or archive index)
 AtpBenchmarkRunner.select_problems(["GRP001-0.p", "LAT001+0.p", "USR001+0.ax"])
 
 # With directory hint
@@ -136,7 +136,7 @@ AtpBenchmarkRunner.install_tptp_examples!()
 # Full official distribution (opt-in, ~881MB)
 AtpBenchmarkRunner.ensure_tptp_archive(version: "9.2.1")
 
-# Filter by form, rating, domain — only with full archive
+# Filter by form, rating, domain (full archive only)
 problems =
    AtpBenchmarkRunner.load_tptp_problems(
       forms: ["THF", "FOF"],
@@ -148,7 +148,7 @@ problems =
 ## Local / Livebook usage
 
 ```elixir
-# 1. Pick problems by name — resolved from user dir, bundled tmp, or archive
+# 1. Pick problems by name (user dir, bundled tmp, or archive)
 problems = AtpBenchmarkRunner.select_problems([
   "GRP001-0.p", "LAT001+0.p", "Problems/REL/REL001+0.p"
 ])
@@ -202,16 +202,16 @@ Inside Livebook it returns `Kino.Mermaid` diagrams; elsewhere it returns a
 fenced markdown block you can paste into a markdown cell.
 
 ```elixir
-# Single result → prover → problem → status → timing flowchart
+# Single result -> prover -> problem -> status -> timing flowchart
 AtpBenchmarkRunner.visualize(result)
 
-# List → status pie + wall-time chart (pushed as two Livebook outputs)
+# List -> status pie + wall-time chart (two Livebook outputs)
 AtpBenchmarkRunner.visualize(results)
 
-# Report → aggregated scoreboard
+# Report -> aggregated scoreboard
 AtpBenchmarkRunner.visualize(report)
 
-# Proof → dependency DAG for E/Vampire-style TPTP clause refutations
+# Proof -> dependency DAG for E/Vampire-style TPTP clause refutations
 AtpBenchmarkRunner.visualize_proof(result)
 ```
 
@@ -260,7 +260,7 @@ Three HPC execution modes are available via the `bootstrap/4` call:
 boot = HpcConnect.bootstrap(mode: :local, env_file: ".env")
 session = boot.session
 
-# ── Single-node sequential, full node (default) ──────────────
+# Single-node sequential, full node (default)
 plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
   mode: :hpc,
   hpc_mode: :single_node,
@@ -269,7 +269,7 @@ plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
 )
 results = AtpBenchmarkRunner.run_benchmark(plan)
 
-# ── Single-node sequential, half node ────────────────────────
+# Single-node sequential, half node
 plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
   mode: :hpc,
   hpc_mode: :single_node,
@@ -279,7 +279,7 @@ plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
 )
 results = AtpBenchmarkRunner.run_benchmark(plan)
 
-# ── Single-node parallel ─────────────────────────────────────
+# Single-node parallel
 plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
   mode: :hpc,
   hpc_mode: :single_node,
@@ -289,7 +289,7 @@ plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
 )
 results = AtpBenchmarkRunner.run_benchmark(plan)
 
-# ── Multi-node: each prover on its own node ──────────────────
+# Multi-node: each prover on its own node
 plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
   mode: :hpc,
   hpc_mode: :multi_node,
@@ -366,68 +366,3 @@ is interrupted or recompiled, the submitted job IDs can be recovered from JSON.
 See `examples/benchmark_local.livemd` for an end-to-end notebook skeleton:
 TPTP selection, image planning/building, job submission, monitoring, collection,
 and report rendering.
-
-## HPC bootstrap modes
-
-### Node size (`:node_size`)
-
-Controls how many CPUs are requested per cluster node. Auto-detected per cluster
-and partition; can be overridden explicitly.
-
-| Value   | `--exclusive` | Helma CPU | Fritz singlenode | Fritz spr\* |
-| ------- | ------------- | --------- | ---------------- | ----------- |
-| `:full` | Yes           | 384 CPUs  | 72 CPUs          | 104 CPUs    |
-| `:half` | No            | 192 CPUs  | 36 CPUs          | 52 CPUs     |
-
-### Single-node sequential (default)
-
-All provers on one node. Tasks run one at a time — each gets the node's CPUs
-(controlled by `node_size`). Best for comparing a small number of provers.
-
-```elixir
-# Full node (default)
-plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
-  mode: :hpc,
-  hpc_mode: :single_node,
-  single_node_mode: :sequential,
-  timeout_seconds: 120
-)
-
-# Half node — share cluster node with other jobs
-plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
-  mode: :hpc,
-  hpc_mode: :single_node,
-  single_node_mode: :sequential,
-  node_size: :half,
-  timeout_seconds: 120
-)
-```
-
-### Single-node parallel
-
-All provers on one node. Tasks run concurrently up to `max_parallel_jobs`.
-Each gets a share of CPUs. Best for large problem sets.
-
-```elixir
-plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
-  mode: :hpc,
-  hpc_mode: :single_node,
-  single_node_mode: :parallel,
-  node_size: :full,
-  max_parallel_jobs: 4,
-  timeout_seconds: 120
-)
-```
-
-### Multi-node (prover per node)
-
-Each prover runs on its own node via separate SLURM jobs.
-`node_size` controls whether each prover gets a full or half node.
-
-```elixir
-plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
-  mode: :hpc,
-  hpc_mode: :multi_node,
-  timeout_seconds: 120
-)
-```

@@ -36,7 +36,7 @@ boot =
 	HpcConnect.bootstrap(
 		mode: :local,
 		env_file: env_file,
-		cluster: env_map["HPC_CONNECT_CLUSTER"] || env_map["HPC_CONNECT_SSH_ALIAS"] || "helma",
+		cluster: env_map["HPC_CONNECT_CLUSTER"] || "helma",
 		username: env_map["HPC_CONNECT_USERNAME"],
 		key_path: env_map["HPC_CONNECT_IDENTITY_FILE"]
 	)
@@ -114,7 +114,7 @@ selected_provers = [
 ]
 
 # Use the configured TPTP_ROOT (C:\tmp\tptp from .env).
-# Problems can be selected by name — they resolve from the TPTP archive,
+# Problems can be selected by name; they resolve from the TPTP archive,
 # bundled examples, or a livebook cache automatically.
 problems =
 	AtpBenchmarkRunner.select_problems(
@@ -183,14 +183,14 @@ Auto-detected per cluster (Helma CPU: 384/192, Fritz: 72/36, spr\*: 104/52).
 | `:full`     | Yes           | Maximise per-prover throughput        |
 | `:half`     | No            | Share node with other jobs; efficient |
 
-| Mode                             | `hpc_mode`     | `single_node_mode` | Resource allocation                                                    |
-| -------------------------------- | -------------- | ------------------ | ---------------------------------------------------------------------- |
-| Single-node sequential (default) | `:single_node` | `:sequential`      | All provers share 1 node. Tasks one at a time; each gets node CPUs.    |
+| Mode                             | `hpc_mode`     | `single_node_mode` | Resource allocation                                                  |
+| -------------------------------- | -------------- | ------------------ | -------------------------------------------------------------------- |
+| Single-node sequential (default) | `:single_node` | `:sequential`      | All provers share 1 node. Tasks one at a time; each gets node CPUs.  |
 | Single-node parallel             | `:single_node` | `:parallel`        | All provers share 1 node. Tasks run concurrently (≤ `max_parallel`). |
-| Multi-node (prover per node)     | `:multi_node`  | —                | Each prover gets its own node.                                         |
+| Multi-node (prover per node)     | `:multi_node`  | —                  | Each prover gets its own node.                                       |
 
 ```elixir
-# ── Single-node sequential, full node (default) ───────────────
+# Single-node sequential, full node (default)
 plan =
 	AtpBenchmarkRunner.bootstrap(
 		session,
@@ -400,7 +400,7 @@ target =
 if target do
   IO.puts(AtpBenchmarkRunner.Visualize.markdown(AtpBenchmarkRunner.Visualize.proof(target)))
 else
-  IO.puts("No parseable proof — nothing to show.")
+  IO.puts("No parseable proof; nothing to show.")
 end
 ```
 

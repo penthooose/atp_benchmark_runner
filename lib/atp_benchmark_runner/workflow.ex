@@ -59,7 +59,7 @@ defmodule AtpBenchmarkRunner.Workflow do
   One-shot nightly orchestration without Oban.
 
   Loads problems, syncs to cluster, builds a Run manifest, submits (or dry-runs),
-  and persists job IDs. Does **not** poll or collect results — call
+  and persists job IDs. Does not poll or collect results; call
   `collect_store_report!/3` separately after jobs finish.
 
   Returns `%{run, submitted_jobs, dry_run?, plan}`.

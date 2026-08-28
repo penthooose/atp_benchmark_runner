@@ -200,7 +200,7 @@ defmodule AtpBenchmarkRunner do
 
   Uploads each prover's `apptainer.def` and builds the remote `.sif`. Set
   `force: true` (alias for `force_rebuild: true`) to rebuild even if the `.sif`
-  already exists — the remote build then uses
+  already exists. The remote build then uses
   `apptainer build --force --ignore-fakeroot-command`.
 
   `build_on_login_node: true` (default) builds directly on the login node; set
@@ -222,7 +222,7 @@ defmodule AtpBenchmarkRunner do
   @doc """
   Builds (or pulls) local images for all given provers in one call.
 
-  `backend` selects the local build tool: `:auto` (default — Docker if
+  `backend` selects the local build tool: `:auto` (default, Docker if
   available, else Apptainer), `:docker`, or `:apptainer`. Set `force: true`
   to rebuild every image even if already present. `provers` may be `:all`.
   Returns a list of `{:ok, name}` / `{:error, name, reason}`.
@@ -266,7 +266,7 @@ defmodule AtpBenchmarkRunner do
   TPTP SeeTPTP CGI and written to their archive-consistent path
   `<tptp_root>/Problems/<DOMAIN>/<NAME>.p`. Names the server does not have
   (e.g. bundled smoke examples that are not real TPTP problems) are looked up in
-  the local sources by default — bundled examples from `priv/tptp_examples` are
+  the local sources by default; bundled examples from `priv/tptp_examples` are
   auto-copied into the bundled tmp dir and returned from there, so they are
   usable without ever being written into `<tptp_root>/Problems/`.
 
@@ -286,7 +286,7 @@ defmodule AtpBenchmarkRunner do
 
   @doc """
   Like `download_tptp_problems/2` but returns `{problems, warnings}` directly
-  for Livebook/manual use. Best-effort — missing names become warnings, never an
+  for Livebook/manual use. Best-effort: missing names become warnings, never an
   exception.
 
       {problems, warnings} = AtpBenchmarkRunner.download_tptp_problems!(names)
@@ -420,19 +420,19 @@ defmodule AtpBenchmarkRunner do
 
   ## Modes
 
-    * `:local` (default) — runs provers sequentially, each prover runs all problems
-    * `:hpc` — runs provers in parallel on HPC via `hpc_connect`
-      * `:single_node` (default) — all provers on one compute node
-      * `:multi_node` — each prover on its own node
+    * `:local` (default) - runs provers sequentially, each prover runs all problems
+    * `:hpc` - runs provers in parallel on HPC via `hpc_connect`
+      * `:single_node` (default) - all provers on one compute node
+      * `:multi_node` - each prover on its own node
 
   ## Options
 
-    * `:timeout_seconds` — per-problem limit (default: 60)
-    * `:include_raw_output` — include full stdout (default: false)
-    * `:auto_ensure_images` — pull/build missing images (default: false)
-    * `:node_size` — CPU node allocation: `:full` (default) or `:half`
-      * `:full` — `--exclusive` with all CPUs on the node
-      * `:half` — no `--exclusive`, requests half the node's CPUs
+    * `:timeout_seconds` - per-problem limit (default: 60)
+    * `:include_raw_output` - include full stdout (default: false)
+    * `:auto_ensure_images` - pull/build missing images (default: false)
+    * `:node_size` - CPU node allocation: `:full` (default) or `:half`
+      * `:full` - `--exclusive` with all CPUs on the node
+      * `:half` - no `--exclusive`, requests half the node's CPUs
       * CPU counts are auto-detected per cluster (Helma: 384/192, Fritz: 72/36, spr*: 104/52)
   """
   @spec bootstrap(
@@ -472,18 +472,18 @@ defmodule AtpBenchmarkRunner do
 
   Available HPC options (passed in the keyword list):
 
-    * `:hpc_mode` — `:single_node` (default) or `:multi_node`
-    * `:single_node_mode` — `:sequential` (default) or `:parallel`
-    * `:node_size` — `:full` (default) or `:half`
+    * `:hpc_mode` - `:single_node` (default) or `:multi_node`
+    * `:single_node_mode` - `:sequential` (default) or `:parallel`
+    * `:node_size` - `:full` (default) or `:half`
       * Controls CPU allocation on the target cluster
-      * `:full` → `--exclusive` with all node CPUs
-      * `:half` → no `--exclusive`, half the node's CPUs
+      * `:full` -> `--exclusive` with all node CPUs
+      * `:half` -> no `--exclusive`, half the node's CPUs
       * Auto-detected per cluster (Helma: 384/192, Fritz: 72/36, spr*: 104/52)
-    * `:timeout_seconds` — per-problem limit (default: 60)
-    * `:partition` — SLURM partition (default: "cpu")
-    * `:max_parallel_jobs` — max concurrent tasks (default: 4)
-    * `:wait_for_completion` — poll until done (default: true)
-    * `:prepare_images` — auto-build missing SIF images (default: false)
+    * `:timeout_seconds` - per-problem limit (default: 60)
+    * `:partition` - SLURM partition (default: "cpu")
+    * `:max_parallel_jobs` - max concurrent tasks (default: 4)
+    * `:wait_for_completion` - poll until done (default: true)
+    * `:prepare_images` - auto-build missing SIF images (default: false)
 
       plan = AtpBenchmarkRunner.bootstrap(session, provers, problems,
                mode: :hpc,
@@ -500,17 +500,15 @@ defmodule AtpBenchmarkRunner do
         ) :: Run.t()
   def bootstrap(session, provers, problems, opts) do
     mode = Keyword.get(opts, :mode, :hpc)
-    # keep mode check for future validation
     _ = mode
 
     provers_norm = normalize_provers(provers)
     problems_norm = normalize_problems(problems)
 
     # `extended_debug: true` turns on per-command tracing (every SSH/SCP/upload
-    # printed with a timestamp) so a Livebook runtime crash during `run_benchmark`
-    # can be traced to the exact command. It is stored on the session (so it
-    # survives the plan round-trip via `session_config`) and in the plan metadata
-    # (so the HPC runner can emit phase-level markers).
+    # printed with a timestamp), so a Livebook runtime crash during
+    # `run_benchmark` can be traced to the exact command. Stored on the session
+    # and in the plan metadata so the HPC runner can emit phase-level markers.
     session = maybe_enable_extended_debug(session, opts)
 
     hpc_config =
@@ -573,9 +571,9 @@ defmodule AtpBenchmarkRunner do
             session = session_from_plan(plan)
 
             # Honor the plan's explicit wait_for_completion instead of forcing
-            # `true` — the notebook plan carries its own value (§7 sets false so
-            # submission returns quickly; collection then rides retry-forever
-            # until results arrive).
+            # `true`. The notebook plan carries its own value (section 7 sets
+            # false so submission returns quickly; collection then rides
+            # retry-forever until results arrive).
             plan_wait = plan.metadata[:hpc][:wait_for_completion] || false
             run_opts = [wait_for_completion: plan_wait]
 
@@ -622,7 +620,7 @@ defmodule AtpBenchmarkRunner do
 
   ## Options
 
-    * `:collect_retry_delay_ms` — initial backoff between attempts (default: 10_000 ms)
+    * `:collect_retry_delay_ms` - initial backoff between attempts (default: 10_000 ms)
   """
   @spec collect_hpc_results!(HpcConnect.Session.t(), Run.t() | binary(), keyword()) :: [
           Result.t()
@@ -648,7 +646,7 @@ defmodule AtpBenchmarkRunner do
             case AtpBenchmarkRunner.HPC.Results.find_remote_run(session, run_id, opts) do
               nil ->
                 raise ArgumentError,
-                      "No run found for #{inspect(run_id)} — not in the local store " <>
+                      "No run found for #{inspect(run_id)}. Not in the local store " <>
                         "(#{Store.default_dir()}) and no matching results dir on the cluster. " <>
                         "The run may never have reached sbatch (e.g. SSH refused during problem " <>
                         "sync). Use `Store.list_runs/1` for local run ids."
@@ -663,7 +661,7 @@ defmodule AtpBenchmarkRunner do
             run = Store.load_run!(path)
 
             # Only a run that was actually submitted can still be producing
-            # results — a draft manifest (persisted at run start but never
+            # results. A draft manifest (persisted at run start but never
             # reaching sbatch) must collect with finite retries, otherwise a
             # crashed/failed run would hang polling forever.
             submitted? =
@@ -674,8 +672,8 @@ defmodule AtpBenchmarkRunner do
               IO.puts("[collect] Resuming submitted run #{run.id}")
             else
               IO.puts(
-                "[collect] Run #{run.id} was never submitted (draft manifest) — " <>
-                  "collecting with finite retries; likely no results to fetch."
+                "[collect] Run #{run.id} was never submitted (draft manifest). " <>
+                  "Collecting with finite retries; likely no results to fetch."
               )
             end
 
@@ -693,7 +691,7 @@ defmodule AtpBenchmarkRunner do
   persisted). Useful after a crashed or interrupted notebook run.
 
   Only manifests that were actually submitted (have submitted SLURM job ids) are
-  considered — a plan persisted at run start but that never reached `sbatch`
+  considered. A plan persisted at run start but that never reached `sbatch`
   (e.g. SSH refused during problem sync) is skipped. If no submitted local
   manifest exists, the newest run directory on the remote cluster is used
   instead (covering runs that were never persisted locally).
@@ -728,7 +726,7 @@ defmodule AtpBenchmarkRunner do
             hint =
               if drafts > 0 do
                 "#{drafts} local manifest(s) exist but none has submitted jobs, and no run " <>
-                  "directory was found on the cluster — the run likely failed before sbatch " <>
+                  "directory was found on the cluster. The run likely failed before sbatch " <>
                   "(e.g. SSH refused during problem sync)."
               else
                 "No local manifests and no run directory found on the cluster. " <>
@@ -1037,7 +1035,7 @@ defmodule AtpBenchmarkRunner do
       AtpBenchmarkRunner.visualize(results)
       AtpBenchmarkRunner.visualize(report)
 
-  A single result renders a prover → problem → status → timing flowchart; a
+  A single result renders a prover -> problem -> status -> timing flowchart; a
   list renders a status pie plus a wall-time chart (pushed as two Livebook
   outputs, returning `:ok`); a report renders a scoreboard. See
   `AtpBenchmarkRunner.Visualize` for the raw builders.
@@ -1198,10 +1196,10 @@ defmodule AtpBenchmarkRunner do
 
   ## Options
 
-    * `:prover` — filter to a specific prover atom (e.g. `:eprover`)
-    * `:problem` — filter to a specific problem id
-    * `:solved_only` — only include solved results (default: false)
-    * `:failed_only` — only include failed results (default: false)
+    * `:prover` - filter to a specific prover atom (e.g. `:eprover`)
+    * `:problem` - filter to a specific problem id
+    * `:solved_only` - only include solved results (default: false)
+    * `:failed_only` - only include failed results (default: false)
   """
   @spec verbose_report([Result.t()], keyword()) :: [binary()]
   def verbose_report(results, opts \\ []) do

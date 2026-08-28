@@ -40,7 +40,7 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
 
   All uploads (originals + SMT/THF conversions) are collected and flushed in a
   minimal number of batched SSH commands (`RemoteFiles.upload_files!/3`) instead
-  of one fresh SSH/SCP connection per file — the csnhr jump gateway throttles
+  of one fresh SSH/SCP connection per file. The csnhr jump gateway throttles
   after too many requests in a short window, which previously stalled the sync
   and could take the whole Livebook runtime down with it.
 
@@ -124,12 +124,12 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
     end
   end
 
-  # The original problem file is only re-uploaded when it is not already remote
+  # The original problem file is only re-uploaded when not already remote
   # (unchanged copies are reused). Converted files (.smt2 / _thf.p) are
-  # regenerated fresh by the runner before each sync, so they are ALWAYS
-  # re-uploaded — a stale remote conversion previously produced wrong results.
-  # Because every upload rides the same batched call, always re-uploading
-  # conversions costs no extra connections.
+  # regenerated fresh before each sync, so they are always re-uploaded; a stale
+  # remote conversion previously produced wrong results. Since every upload
+  # rides the same batched call, re-uploading conversions costs no extra
+  # connections.
   defp original_uploads(%Problem{path: path}, remote_path, existing) do
     if MapSet.member?(existing, remote_path) do
       []

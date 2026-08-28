@@ -2,7 +2,7 @@ defmodule AtpBenchmarkRunner.Problem do
   @moduledoc """
   A TPTP benchmark problem. Points to a local or remote path, or a name.
 
-  Kept intentionally small — bulk metadata lives in the result store.
+  Kept intentionally small; bulk metadata lives in the result store.
   """
 
   @enforce_keys [:id, :name]
@@ -80,9 +80,9 @@ defmodule AtpBenchmarkRunner.Problem do
       |> from_path(attrs)
       |> Map.put(:source, Keyword.get(attrs, :source, :local))
 
-    # Override logic from SPC header when available — the file-name
-    # heuristic (separator → logic) is wrong for e.g. THF001+0.p
-    # (separator "+" → "FOF", but SPC says "THF_THM_NEQ").
+    # Override logic from the SPC header when available. The file-name
+    # heuristic (separator to logic) is wrong for e.g. THF001+0.p (separator
+    # "+" maps to "FOF", but the SPC says "THF_THM_NEQ").
     case problem.metadata[:spc] do
       nil ->
         problem

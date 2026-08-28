@@ -2,27 +2,21 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
   @moduledoc """
   Livebook setup overlay for the ATP benchmark runner.
 
-  Renders a Kino form to configure **every** env var the runner reads, so the
+  Renders a Kino form to configure every env var the runner reads, so the
   notebook can be run from a container/server with no local `.env` file and no
-  SSH access to the machine running it — everything is configured in the
-  browser instead.
+  SSH access to the machine running it. Everything is configured in the browser.
 
   ## Behaviour
 
-  - Field defaults are resolved in this order:
-    1. previously persisted value (from an earlier notebook session), so you
-       never retype everything when reopening the notebook;
-    2. value from the `.env` / `.env.example` file (only fills blank fields);
-    3. a sensible default — path fields default to the Livebook session temp
-       dir, e.g. `<tmp>/atp_benchmark_runner/tptp`.
-    4. the SSH identity field additionally auto-detects an existing private key
-       in the user's `~/.ssh` (cross-platform) when nothing is persisted or
-       configured, so the default points at a real key instead of a hardcoded
-       name. The configured-paths report always prints the effective SSH key
-       path and marks staged uploads with `(temp)`.
-  - Pressing **Setup** applies the form values to the OS env (like
+  - Field defaults resolve in this order: previously persisted value, then the
+    `.env` / `.env.example` value (only fills blank fields), then a sensible
+    default (path fields use the Livebook session temp dir). The SSH identity
+    field also auto-detects a key in the user's `~/.ssh` when nothing is
+    configured.
+  - Pressing **Setup** applies the values to the OS env (like
     `AtpBenchmarkRunner.load_env!/1`), writes them to a temp `.env` file for
-    `HpcConnect.bootstrap/1`, and prints the resolved paths.
+    `HpcConnect.bootstrap/1`, and prints the resolved paths. Staged uploads are
+    marked `(temp)` and removed by `cleanup_livebook_setup/1`.
   - Secret fields (`HUGGINGFACE_HUB_TOKEN`) are never persisted.
 
   ## Usage (notebook, first cell)
@@ -37,8 +31,8 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
       env_map = setup.env_map
       env_file = setup.env_file
 
-  Pass `mode: :local` to skip the UI (used by tests / non-Livebook runs) —
-  the form defaults are applied directly.
+  Pass `mode: :local` to skip the UI (used by tests and non-Livebook runs); the
+  form defaults are applied directly.
   """
 
   alias HpcConnect.EnvFile
@@ -64,7 +58,7 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
   @spec inputs() :: [spec()]
   def inputs do
     [
-      # ── Paths (default to the Livebook session temp dir) ──────────────────
+      # Paths (default to the Livebook session temp dir)
       path("TPTP_ROOT", :tptp_root, "Paths · TPTP root", "tptp",
         help: "Local TPTP problem library root"
       ),
@@ -81,7 +75,7 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
       path("ATP_BENCHMARK_RUNNER_BUNDLED_EXAMPLES_DIR", :bundled, "Paths · Bundled examples", "tptp_examples"),
       path("ATP_BENCHMARK_RUNNER_USER_EXAMPLES_DIR", :user_examples, "Paths · User examples", "user_examples"),
       path("ATP_BENCHMARK_RUNNER_SINGLE_DOWNLOAD_DIR", :single_download, "Paths · Single download base", "downloads"),
-      # ── HPC connection ────────────────────────────────────────────────────
+      # HPC connection
       select("HPC_CONNECT_CLUSTER", :cluster, "HPC · Cluster", ["helma", "fritz", "alex", "woody", "spr", "tringpu"], "helma"),
       text("HPC_CONNECT_USERNAME", :username, "HPC · Username", ""),
       text("HPC_CONNECT_IDENTITY_FILE", :identity_file, "HPC · SSH identity file", ""),
@@ -92,7 +86,7 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
       select("HPC_CONNECT_STEADY_CONNECTION", :steady, "HPC · Steady SSH connection", ["true", "false"], "true"),
       text("HPC_CONNECT_STEADY_TIMEOUT_SECONDS", :steady_timeout, "HPC · Steady SSH timeout (s)", "30"),
       select("HPC_CONNECT_RETRY_FOREVER", :retry_forever, "HPC · Retry SSH errors forever", ["true", "false"], "true"),
-      # ── HPC benchmark defaults ────────────────────────────────────────────
+      # HPC benchmark defaults
       select("ATP_BENCHMARK_RUNNER_HPC_MODE", :hpc_mode, "Benchmark · HPC mode", ["single_node", "multi_node"], "single_node"),
       select(
         "ATP_BENCHMARK_RUNNER_HPC_SINGLE_NODE_MODE",
@@ -116,7 +110,7 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
       text("ATP_BENCHMARK_RUNNER_HPC_CPUS_PER_TASK", :cpus_per_task, "Benchmark · CPUs per task (optional)", ""),
       text("ATP_BENCHMARK_RUNNER_HPC_NTASKS", :ntasks, "Benchmark · NTasks", "1"),
       select("ATP_BENCHMARK_RUNNER_HPC_PREPARE_IMAGES", :prepare_images, "Benchmark · Prepare images", ["false", "true"], "false"),
-      # ── Secrets (never persisted) ─────────────────────────────────────────
+      # Secrets (never persisted)
       secret("HUGGINGFACE_HUB_TOKEN", :hf_token, "HuggingFace token (optional)")
     ]
   end
@@ -127,13 +121,13 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
   writes them to a temp `.env` file for `HpcConnect.bootstrap/1`, prints the
   resolved paths, and returns:
 
-    * `:env_map` — non-blank env vars that were applied
-    * `:env_file` — path to the temp `.env` file (pass to `bootstrap/1`)
-    * `:values` — all form values (including blanks)
-    * `:persisted_path` — where values are persisted between notebook opens
-    * `:ssh_key_path` — the effective SSH identity file (a staged temp key when
+    * `:env_map` - non-blank env vars that were applied
+    * `:env_file` - path to the temp `.env` file (pass to `bootstrap/1`)
+    * `:values` - all form values (including blanks)
+    * `:persisted_path` - where values are persisted between notebook opens
+    * `:ssh_key_path` - the effective SSH identity file (a staged temp key when
       uploaded, otherwise the configured `~/.ssh` path)
-    * `:ssh_key_temporary?` — whether `:ssh_key_path` is a temporary upload that
+    * `:ssh_key_temporary?` - whether `:ssh_key_path` is a temporary upload that
       `cleanup/1` will delete
   """
   @spec prepare(keyword()) :: map()
@@ -160,15 +154,14 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
     end
   end
 
-  # Livebook setup: renders the form + a status frame, then blocks until the
-  # first submit. A persistent owner (`HpcConnect.Livebook.Form`) keeps the
-  # subscription alive after the cell finishes, so values can be edited and
-  # re-submitted without re-running the cell — each submit re-applies the env,
-  # re-writes the temp `.env`, and re-renders the configured paths into the
-  # status frame.
+  # Renders the form and a status frame, then blocks until the first submit. A
+  # persistent owner (`HpcConnect.Livebook.Form`) keeps the subscription alive
+  # after the cell finishes, so values can be edited and re-submitted without
+  # re-running the cell. Each submit re-applies the env, re-writes the temp
+  # `.env`, and re-renders the configured paths into the status frame.
   defp prepare_livebook(opts, defaults, persist_path) do
-    # The upload field is ALWAYS shown so a previously-configured key can be
-    # replaced by an upload later. A configured path that exists is still used
+    # The upload field is always shown so a previously-configured key can be
+    # replaced by an upload later; a configured path that exists is still used
     # when no upload is provided.
     configured_key =
       HpcConnect.Livebook.SshKey.configured_path(
@@ -217,8 +210,8 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
 
   # Applies one submit after validation: persists, applies env, writes the temp
   # `.env`, renders the configured paths into the status frame, and returns the
-  # result map. On invalid input returns `{:retry, frame}` so the owner keeps the
-  # cell waiting until everything is valid.
+  # result map. On invalid input returns `{:retry, frame}` so the owner keeps
+  # the cell waiting until everything is valid.
   defp handle_submit(data, opts, persist_path) do
     values =
       Map.new(inputs(), fn spec -> {spec.env, Map.get(data, spec.key)} end)
@@ -255,29 +248,29 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
     end
   end
 
-  # Validates the essentials the following cells need before §1 returns: an HPC
-  # username and an SSH identity file that actually exists on disk.
+  # Validates what the following cells need before §1 returns: an HPC username
+  # and an SSH identity file that exists on disk.
   defp validate_setup(values) do
     cond do
       not non_blank?(values["HPC_CONNECT_USERNAME"]) ->
-        {:error, "HPC username is missing — enter it and press Setup again."}
+        {:error, "HPC username is missing. Enter it and press Setup again."}
 
       not non_blank?(values["HPC_CONNECT_IDENTITY_FILE"]) ->
         {:error,
-         "No SSH identity file — upload a key or set HPC_CONNECT_IDENTITY_FILE, then press Setup again."}
+         "No SSH identity file. Upload a key or set HPC_CONNECT_IDENTITY_FILE, then press Setup again."}
 
       not File.exists?(Path.expand(values["HPC_CONNECT_IDENTITY_FILE"])) ->
         {:error,
-         "The SSH identity file #{values["HPC_CONNECT_IDENTITY_FILE"]} does not exist — " <>
-           "upload a key or fix the path, then press Setup again."}
+         "The SSH identity file #{values["HPC_CONNECT_IDENTITY_FILE"]} does not exist. " <>
+           "Upload a key or fix the path, then press Setup again."}
 
       true ->
         :ok
     end
   end
 
-  # Resolves the effective SSH identity file: an uploaded key wins; otherwise a
-  # configured path that exists is used; otherwise the typed text value is kept.
+  # Resolves the effective SSH identity file: an uploaded key wins, otherwise a
+  # configured path that exists is used, otherwise the typed value is kept.
   defp put_ssh_key(values, typed_path, upload) do
     identity =
       case HpcConnect.Livebook.SshKey.resolve([identity_file: typed_path], upload) do
@@ -299,8 +292,8 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
   end
 
   # Auto-detects a private key in the user's `~/.ssh` (cross-platform) when no
-  # persisted or env identity is configured, so the identity field pre-fills
-  # with an existing key instead of a hardcoded name.
+  # persisted or env identity is configured, so the field pre-fills with a real
+  # key instead of a hardcoded name.
   defp maybe_default_identity(defaults) do
     case Map.get(defaults, "HPC_CONNECT_IDENTITY_FILE") do
       value when is_binary(value) and value != "" ->
@@ -358,8 +351,8 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
 
   @doc false
   # Writes the non-blank values to a temp `.env` file and returns its path
-  # (normalized via `Path.expand` so the returned path uses the platform's
-  # canonical separator on both Windows and Linux).
+  # (via `Path.expand`, so it uses the platform's canonical separator on both
+  # Windows and Linux).
   @spec write_env_file(map(), keyword()) :: binary()
   def write_env_file(values, opts) do
     path =
@@ -434,7 +427,7 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
     end
   end
 
-  # ── field helpers ─────────────────────────────────────────────────────────
+  # field helpers
 
   defp text(env, key, label, default),
     do: %{key: key, env: env, label: label, type: :text, default: default}
@@ -465,8 +458,8 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
   end
 
   @doc false
-  # Kino ≥ 0.19 requires select options as `{value, label}` tuples, not a flat
-  # string list — convert the spec's string options at render time.
+  # Kino >= 0.19 requires select options as `{value, label}` tuples, not a flat
+  # string list, so the spec's string options are converted at render time.
   @spec select_options([binary()]) :: [{binary(), binary()}]
   def select_options(options) when is_list(options), do: Enum.map(options, &{&1, &1})
 
@@ -484,7 +477,7 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
 
   @doc """
   Deletes any temporary SSH key uploaded by the setup overlay (never a
-  persistent `~/.ssh` key) and prints a short notice — no error when nothing
+  persistent `~/.ssh` key) and prints a short notice. No error when nothing
   is left to delete.
   """
   @spec cleanup(keyword()) :: :ok
@@ -495,7 +488,7 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
   @doc false
   defp submit_label(opts), do: Keyword.get(opts, :submit_label, @default_submit_label)
 
-  # ── persistence / env resolution ──────────────────────────────────────────
+  # persistence / env resolution
 
   defp session_tmp_base(opts) do
     Keyword.get(opts, :tmp_base, Path.join(System.tmp_dir!(), @tmp_base))
@@ -550,7 +543,7 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
     :ok
   end
 
-  # ── Kino indirection (no hard compile-time Kino dependency) ───────────────
+  # Kino indirection (no hard compile-time Kino dependency)
 
   defp ensure_kino_available! do
     unless Code.ensure_loaded?(kino_module()) and Code.ensure_loaded?(kino_input_module()) and

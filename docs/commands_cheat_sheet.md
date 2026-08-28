@@ -162,7 +162,7 @@ results = AtpBenchmarkRunner.collect_hpc_results!(session, run)
 ```
 
 If the run id is not in the local store, both calls fall back to the **remote
-cluster** (`run_results/<run_id>` results dir) and fetch from there — so HPC
+cluster** (`run_results/<run_id>` results dir) and fetch from there, so HPC
 runs that were never persisted locally are still resumable. `collect_last_hpc_results!/2`
 skips plans that never reached `sbatch`; `ArgumentError` is raised only when the
 run exists neither locally nor on the cluster.

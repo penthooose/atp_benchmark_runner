@@ -2,19 +2,19 @@ defmodule AtpBenchmarkRunner.Prover.Spec do
   @moduledoc """
   Loads and validates declarative per-prover specs from `priv/provers/<name>/prover.exs`.
 
-  A spec is deliberately minimal — only the keys the build and runtime actually
+  A spec is deliberately minimal: only the keys the build and runtime actually
   use are allowed, and unknown keys are rejected on load:
 
-    * identity — `name` (required), `label`, `aliases`
-    * invocation — `command_template` (required), `sif_name` (defaults to `name`)
-    * behavior hooks (all optional, only set when non-default) —
+    * identity - `name` (required), `label`, `aliases`
+    * invocation - `command_template` (required), `sif_name` (defaults to `name`)
+    * behavior hooks (all optional, only set when non-default):
       `input` (`:tptp`/`:smt2`/`:thf`/`{:custom, Mod}`),
       `parser` (`:szs`/`:smt_bare`/`{:custom, Mod}`),
       `supports` (`%{forms:, requires_conjecture?:}` overlaid on defaults)
-    * container — `container` (required): `def_path` (required for HPC),
+    * container - `container` (required): `def_path` (required for HPC),
       `docker_image` + `dockerfile_path` (local Docker); `image_name` defaults
       to the SIF name
-    * free-form `metadata` — reserved for real consumers (e.g. `logics`, used
+    * free-form `metadata` - reserved for real consumers (e.g. `logics`, used
       by the HPC image smoke test to pick a compatible example)
 
   The registry (`Provers`) discovers provers purely by scanning this directory,
@@ -150,7 +150,7 @@ defmodule AtpBenchmarkRunner.Prover.Spec do
     |> Container.new()
   end
 
-  # ── internals ──────────────────────────────────────────────────────────────
+  # internals
 
   defp do_load_all do
     {provers, containers} =

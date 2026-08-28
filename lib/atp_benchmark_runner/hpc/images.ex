@@ -200,7 +200,7 @@ defmodule AtpBenchmarkRunner.HPC.Images do
 
       if missing == [] do
         Logger.info(
-          "[Images] All #{length(provers)} prover SIFs already exist remote — skip build"
+          "[Images] All #{length(provers)} prover SIFs already exist remote; skip build"
         )
 
         Map.new(provers, fn prover -> {prover.name, remote_sif_path(session, prover)} end)
@@ -209,7 +209,7 @@ defmodule AtpBenchmarkRunner.HPC.Images do
 
         Logger.info(
           "[Images] #{length(missing)}/#{length(provers)} prover SIFs missing: " <>
-            "#{inspect(Enum.map(missing, & &1.name))} — building those"
+            "#{inspect(Enum.map(missing, & &1.name))}; building those"
         )
 
         build_all!(session, missing, opts)

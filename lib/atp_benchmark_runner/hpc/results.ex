@@ -10,14 +10,14 @@ defmodule AtpBenchmarkRunner.HPC.Results do
   Collects all remote result metadata/output files for a run.
 
   Reads all result files per prover via a single bulk SSH command instead of
-  one SSH call per file — avoids rate-limiting the SSH gateway.
+  one SSH call per file, avoiding rate-limiting the SSH gateway.
 
   Retries with exponential backoff on transient SSH failures so results are
   eventually collected even when the SSH gateway is under load.
 
   ## Options
 
-    * `:wait_for_job` — when `true` (default) and the run has SLURM job ids, the
+    * `:wait_for_job` - when `true` (default) and the run has SLURM job ids, the
       job state is polled (cheap `sacct`) while the job is still running and the
       expensive tar+SCP download is skipped until the job terminates. Runs
       without job ids (e.g. remote-discovered) always fall back to direct
@@ -44,11 +44,11 @@ defmodule AtpBenchmarkRunner.HPC.Results do
     )
   end
 
-  # The runner knows how many (prover × problem) results should exist. When an
-  # expected count is provided, collection keeps polling until that many result
-  # files are present instead of grabbing the first partial directory — this is
-  # what previously caused "only tableaux produced output" when collection raced
-  # ahead of a still-running job.
+  # The runner knows how many (prover x problem) results should exist. When an
+  # expected count is given, collection keeps polling until that many result
+  # files are present instead of grabbing the first partial directory (which
+  # is what previously caused "only tableaux produced output" when collection
+  # raced ahead of a still-running job).
   defp expected_result_count(%Run{} = run, opts) do
     case Keyword.get(opts, :expected_results) do
       count when is_integer(count) and count > 0 ->
@@ -72,7 +72,7 @@ defmodule AtpBenchmarkRunner.HPC.Results do
          _wait_for_job,
          _prev_count
        ) do
-    IO.puts("[Results] Max retries reached — returning partial results or empty")
+    IO.puts("[Results] Max retries reached; returning partial results or empty")
 
     case try_collect(session, run, opts) do
       {:ok, results} ->
@@ -95,17 +95,16 @@ defmodule AtpBenchmarkRunner.HPC.Results do
          wait_for_job,
          prev_count
        ) do
-    # While `:wait_for_job` is set (default), avoid repeatedly re-downloading the
-    # whole results tar on every poll while the SLURM job is still running — the
-    # download is the expensive part and its contents only change as the job
-    # writes new results. Poll the (cheap) sacct job state instead and only fetch
-    # once the job has terminated.
+    # With `:wait_for_job` (default) do not re-download the whole results tar on
+    # every poll while the SLURM job is still running. The download is the
+    # expensive part and its contents only change as the job writes new results,
+    # so poll the cheap sacct job state and fetch only once the job terminated.
     status = if wait_for_job, do: job_status(session, run), else: :unknown
 
     if status == :running do
       retry_note(
         "[Results]",
-        "job still running — waiting for completion before fetching",
+        "job still running; waiting for completion before fetching",
         retries_left,
         delay_ms,
         forever?
@@ -130,13 +129,13 @@ defmodule AtpBenchmarkRunner.HPC.Results do
       case result do
         {:ok, results} when results != [] ->
           if is_integer(expected) and length(results) < expected do
-            # Once the job has terminated, a fetch that returns the same count as
-            # the previous one means the run is complete with what it produced
-            # (some problems may legitimately yield no result file) — stop
-            # re-downloading instead of looping forever on an unreachable target.
+            # After the job terminated, a fetch returning the same count as the
+            # previous one means the run is complete with what it produced (some
+            # problems may legitimately yield no result file), so stop
+            # re-downloading instead of looping forever.
             if status == :terminal and prev_count == length(results) do
               IO.puts(
-                "[Results] Collected #{length(results)} results — stable after job " <>
+                "[Results] Collected #{length(results)} results, stable after job " <>
                   "termination, assuming complete"
               )
 
@@ -204,12 +203,12 @@ defmodule AtpBenchmarkRunner.HPC.Results do
   end
 
   # In "retry until success" mode the counter is never decremented, so the
-  # collection keeps polling with exponential backoff until the results arrive.
+  # collection keeps polling with exponential backoff until results arrive.
   defp next_retry(retries_left, true), do: retries_left
   defp next_retry(retries_left, false), do: retries_left - 1
 
-  # Muted retry logging: a one-line note while many retries remain; the full
-  # (potentially huge) reason / command dump only when about to give up.
+  # Muted retry logging: a one-line note while many retries remain, the full
+  # (potentially huge) reason/command dump only when about to give up.
   defp retry_note(label, kind, retries_left, delay_ms, forever?, detail \\ nil) do
     left =
       if forever? do
@@ -220,12 +219,12 @@ defmodule AtpBenchmarkRunner.HPC.Results do
 
     detail_part =
       if not is_nil(detail) and (forever? or retries_left <= 2) do
-        " — #{truncate_text(detail, 240)}"
+        "; #{truncate_text(detail, 240)}"
       else
         ""
       end
 
-    IO.puts("#{label} #{kind}#{detail_part} — #{left}, retrying in #{delay_ms}ms")
+    IO.puts("#{label} #{kind}#{detail_part}; #{left}, retrying in #{delay_ms}ms")
   end
 
   defp truncate_text(text, max) when is_binary(text) do
@@ -234,12 +233,12 @@ defmodule AtpBenchmarkRunner.HPC.Results do
 
   defp truncate_text(text, _max), do: to_string(text)
 
-  # Determines whether a run's SLURM jobs are still active. Returns:
+  # Classifies whether a run's SLURM jobs are still active:
   #
-  #   * `:running`  — at least one submitted job is not in a terminal state
-  #   * `:terminal` — all submitted jobs reached a terminal state (or are gone
+  #   * `:running`  - at least one submitted job is not in a terminal state
+  #   * `:terminal` - all submitted jobs reached a terminal state (or are gone
   #     from sacct, i.e. finished)
-  #   * `:unknown`  — the run has no trackable job ids, or the query failed
+  #   * `:unknown`  - the run has no trackable job ids, or the query failed
   #
   # Runs without job ids (e.g. a minimal `%Run{}` reconstructed via remote
   # discovery) always report `:unknown`, so collection falls back to the
@@ -276,7 +275,7 @@ defmodule AtpBenchmarkRunner.HPC.Results do
     |> Enum.map(&to_string/1)
   end
 
-  # Pure classification of raw sacct output — exposed (doc false) for unit
+  # Pure classification of raw sacct output. Exposed (doc false) for unit
   # testing without an SSH session.
   @doc false
   @spec classify_job_output(binary()) :: :running | :terminal
@@ -307,9 +306,9 @@ defmodule AtpBenchmarkRunner.HPC.Results do
 
     IO.puts("[Results] Looking for results in: #{paths.results_dir}")
 
-    # Single bulk call: directory listing + result-file presence check. Marker is
-    # underscore-only — bash would choke on shell metacharacters (`<<<` is a
-    # here-string operator) and kill the persistent shell.
+    # Single bulk call: directory listing + result-file presence check. The marker
+    # stays underscore-only because shell metacharacters (`<<<` is a here-string
+    # operator) would kill the persistent shell.
     marker = "__HPC_RESULTS_CHECK__"
 
     bulk =
@@ -328,7 +327,7 @@ defmodule AtpBenchmarkRunner.HPC.Results do
       IO.puts("[Results] No result files found (empty directories)")
       {:ok, []}
     else
-      IO.puts("[Results] Found result files — downloading via tar+SCP")
+      IO.puts("[Results] Found result files; downloading via tar+SCP")
       collect_via_tar(session, paths.results_dir, run, opts)
     end
   rescue
@@ -353,7 +352,7 @@ defmodule AtpBenchmarkRunner.HPC.Results do
     remote_tar = posix_join(parent, "results_#{run.id}.tar.gz")
 
     # Step 1: create the tar (unless already present from a previous retry) in a
-    # single SSH call — replaces the old test-then-create pair.
+    # single SSH call.
     tar_status =
       HpcConnect.connect!(
         session,

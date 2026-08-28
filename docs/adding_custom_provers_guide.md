@@ -14,7 +14,7 @@ A prover directory contains exactly three files:
 
 A ready-made scaffold lives in [`priv/provers/_template/`](../priv/provers/_template/).
 
-## 0. Scope — which provers fit today
+## 0. Scope: which provers fit today
 
 The plug-and-play path is designed for **TPTP-native provers**: they read `.p`
 files directly and print a `% SZS status ...` line. That covers the large
@@ -38,27 +38,27 @@ for custom conversion/parsing by non-Elixir contributors is a roadmap item (see
 Only the keys below are recognized; anything else is rejected on load, so a
 spec cannot silently carry unused or misspelled fields.
 
-| Key                         | Required | Meaning                                                                                                                               |
-| --------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                      | ✅       | Canonical atom used everywhere (`:vampire`)                                                                                           |
-| `command_template`          | ✅       | Container invocation; placeholders `{problem}`, `{timeout_seconds}`, `{timeout_ms}`, `{sif_path}`, `{result_file}`, `{cores}`         |
-| `container.def_path`        | ✅       | Path to `apptainer.def` (HPC build)                                                                                                   |
-| `container.docker_image`    | ✅       | Docker image tag (local build/run)                                                                                                    |
-| `container.dockerfile_path` | ✅       | Path to `Containerfile` (local build)                                                                                                 |
-| `label`                     |          | Display name (GUI dropdown, reports); defaults to humanized `name`                                                                    |
-| `aliases`                   |          | Alternate lookup names, e.g. `["e", "e_prover"]` for eprover                                                                          |
-| `sif_name`                  |          | SIF/image name when it differs from `name` (e.g. tableaux → `simple_tableaux_solver`)                                                 |
-| `input`                     |          | `:tptp` (default), `:smt2`, `:thf`, `{:custom, Mod}`                                                                                  |
-| `parser`                    |          | `:szs` (default), `:smt_bare`, `{:custom, Mod}`                                                                                       |
-| `local_execution`           |          | `:container` (default) or `:escript` — how the _local_ runner executes the prover (escript provers are skipped by local image builds) |
-| `our_prover`                |          | `true` marks the designated in-house prover; `Provers.our_prover/0` resolves it, so `Report`/`Compare` use it as the "ours" default   |
-| `supports`                  |          | `%{forms: [:fof, ...], requires_conjecture?: true}` overlaid on defaults                                                              |
-| `metadata.logics`           |          | Used by the HPC image smoke test to pick a compatible example                                                                         |
+| Key                         | Required | Meaning                                                                                                                              |
+| --------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`                      | ✅       | Canonical atom used everywhere (`:vampire`)                                                                                          |
+| `command_template`          | ✅       | Container invocation; placeholders `{problem}`, `{timeout_seconds}`, `{timeout_ms}`, `{sif_path}`, `{result_file}`, `{cores}`        |
+| `container.def_path`        | ✅       | Path to `apptainer.def` (HPC build)                                                                                                  |
+| `container.docker_image`    | ✅       | Docker image tag (local build/run)                                                                                                   |
+| `container.dockerfile_path` | ✅       | Path to `Containerfile` (local build)                                                                                                |
+| `label`                     |          | Display name (GUI dropdown, reports); defaults to humanized `name`                                                                   |
+| `aliases`                   |          | Alternate lookup names, e.g. `["e", "e_prover"]` for eprover                                                                         |
+| `sif_name`                  |          | SIF/image name when it differs from `name` (e.g. tableaux → `simple_tableaux_solver`)                                                |
+| `input`                     |          | `:tptp` (default), `:smt2`, `:thf`, `{:custom, Mod}`                                                                                 |
+| `parser`                    |          | `:szs` (default), `:smt_bare`, `{:custom, Mod}`                                                                                      |
+| `local_execution`           |          | `:container` (default) or `:escript`: how the _local_ runner executes the prover (escript provers are skipped by local image builds) |
+| `our_prover`                |          | `true` marks the designated in-house prover; `Provers.our_prover/0` resolves it, so `Report`/`Compare` use it as the "ours" default  |
+| `supports`                  |          | `%{forms: [:fof, ...], requires_conjecture?: true}` overlaid on defaults                                                             |
+| `metadata.logics`           |          | Used by the HPC image smoke test to pick a compatible example                                                                        |
 
-`container.image_name` defaults to `sif_name`; `sif_name` defaults to `name` —
+`container.image_name` defaults to `sif_name`; `sif_name` defaults to `name`, so
 only override when they differ.
 
-## 2. Reference example — Vampire
+## 2. Reference example: Vampire
 
 Vampire is the canonical minimal prover: TPTP-native, standard SZS output, and
 the image just pulls an upstream release binary.
@@ -100,7 +100,7 @@ ENTRYPOINT ["vampire"]
 
 `priv/provers/vampire/apptainer.def` mirrors the same steps, plus the FAU proxy
 and a static `buildpack-deps` base (no package manager, to avoid rootless
-build issues — see [Troubleshooting](#8-troubleshooting-fauapptainer)).
+build issues; see [Troubleshooting](#8-troubleshooting-fauapptainer)).
 
 ## 3. Step-by-step
 
@@ -110,7 +110,7 @@ build issues — see [Troubleshooting](#8-troubleshooting-fauapptainer)).
    and rename `prover.exs.template` → `prover.exs`.
 3. **Fill in the spec** (`name`, `label`, `aliases`, `command_template`).
    Reference Vampire for the common case.
-4. **Write `Containerfile` + `apptainer.def`** — prefer upstream release
+4. **Write `Containerfile` + `apptainer.def`**: prefer upstream release
    binaries; keep both files in sync (same source, same version).
 5. **Validate the spec loads** (no unknown keys, valid placeholders):
 
@@ -121,7 +121,7 @@ build issues — see [Troubleshooting](#8-troubleshooting-fauapptainer)).
    ```
 
 6. **Local smoke**: build the Docker image and run it against a bundled
-   example — either via the notebook (`examples/benchmark_local.livemd`,
+   example, either via the notebook (`examples/benchmark_local.livemd`,
    `auto_ensure_images: true`) or
 
    ```elixir
@@ -142,20 +142,20 @@ build issues — see [Troubleshooting](#8-troubleshooting-fauapptainer)).
 
 ## 4. Behavior hooks (only when non-default)
 
-### `input` — what the prover consumes
+### `input`: what the prover consumes
 
-- `:tptp` (default) — raw `.p` file.
-- `:smt2` — the runner converts TPTP → SMT-LIB first (cvc5).
-- `:thf` — the runner converts FOF/CNF/TFF → Lash-safe TH0 first (lash).
-- `{:custom, Mod}` — an Elixir module; **in-repo only** (see below).
+- `:tptp` (default) - raw `.p` file.
+- `:smt2` - the runner converts TPTP to SMT-LIB first (cvc5).
+- `:thf` - the runner converts FOF/CNF/TFF to Lash-safe TH0 first (lash).
+- `{:custom, Mod}` - an Elixir module; **in-repo only** (see below).
 
-### `parser` — how the output is read
+### `parser`: how the output is read
 
-- `:szs` (default) — standard `% SZS status` extraction.
-- `:smt_bare` — bare `sat`/`unsat`/`unknown` mapped to SZS (cvc5).
-- `{:custom, Mod}` — an Elixir module; **in-repo only**.
+- `:szs` (default) - standard `% SZS status` extraction.
+- `:smt_bare` - bare `sat`/`unsat`/`unknown` mapped to SZS (cvc5).
+- `{:custom, Mod}` - an Elixir module; **in-repo only**.
 
-### `supports` — problem compatibility
+### `supports`: problem compatibility
 
 - `%{forms: [:cnf, :fof, ...]}` filters problems by logic prefix.
 - `%{requires_conjecture?: true}` skips no-conjecture Satisfiable problems
@@ -165,15 +165,15 @@ build issues — see [Troubleshooting](#8-troubleshooting-fauapptainer)).
 
 ## 5. Validation & tests
 
-- `AtpBenchmarkRunner.Provers.validate/0` — loads every spec and returns issues
+- `AtpBenchmarkRunner.Provers.validate/0` - loads every spec and returns issues
   (missing keys, unknown keys, bad placeholders, invalid `input`/`parser`).
-- `mix test test/atp_benchmark_runner/prover_spec_test.exs` — registry,
+- `mix test test/atp_benchmark_runner/prover_spec_test.exs` - registry,
   aliases, derived `sif_name`/`image_name`, input/parser/supports, and
   compatibility filtering.
 
 ## 6. What NOT to configure
 
-The following fields were removed because nothing consumes them — do not add
+The following fields were removed because nothing consumes them. Do not add
 them back (they are rejected on load): `kind`, `executable`, `homepage`,
 `license`, `build_args`, `metadata.legacy?`, `metadata.k8s_candidate?`,
 `metadata.native_apis`, `metadata.project`, `metadata.notes`,
@@ -181,24 +181,24 @@ them back (they are rejected on load): `kind`, `executable`, `homepage`,
 
 ## 7. Custom input/parser for external provers
 
-You asked: _what about provers that need THF/SMT conversion or custom output
-parsing — external contributors may not write Elixir?_
+What about provers that need THF/SMT conversion or custom output parsing, when
+external contributors may not write Elixir?
 
 **Today** the only extension path for custom conversion is `{:custom, Mod}`,
-which requires writing an Elixir module — effectively an in-repo change. That
+which requires writing an Elixir module (effectively an in-repo change). That
 is exactly why **the current scope is TPTP-native provers only**: they need no
 conversion and standard SZS parsing, so external contributors need nothing but
 a `prover.exs`, a `Containerfile`, and an `apptainer.def`.
 
-**Recommended roadmap** (deferred — not needed for TPTP-native provers):
+**Recommended roadmap** (deferred; not needed for TPTP-native provers):
 
-- **`input: {:script, "<cmd>"}`** — a shell/`python3`/`perl` command declared
+- **`input: {:script, "<cmd>"}`** - a shell/`python3`/`perl` command declared
   in `prover.exs` that converts a `.p` file. The runner would invoke it like
   `cmd <problem> <output_dir>` (local) / before sync (HPC) and use the file it
-  writes. Contributors drop a `prepare.sh`/`convert.py` next to the config —
-  no Elixir required. This mirrors how CASC/StarExec ship provers with their
-  own scripts.
-- **`parser: {:script, "<cmd>"}`** — a command that reads raw prover output on
+  writes. Contributors drop a `prepare.sh`/`convert.py` next to the config,
+  with no Elixir required. This mirrors how CASC/StarExec ship provers with
+  their own scripts.
+- **`parser: {:script, "<cmd>"}`** - a command that reads raw prover output on
   stdin and prints a normalized SZS status.
 
 Both are natural extensions of the existing `Input` module and `Result` parser
@@ -221,6 +221,6 @@ integration for now.
 - **HPC SIF path**: the runner derives
   `${HPC_WORK_DIR}/singularity_images/<sif_name>.sif` from `sif_name`; keep
   `sif_name` in sync with the built `.sif`.
-- **Validate with a hard problem**, not a trivial one — a prover can "solve"
-  easy theorems with its own calculus while its backend (e.g. leo2 → E) is
+- **Validate with a hard problem**, not a trivial one. A prover can "solve"
+  easy theorems with its own calculus while its backend (e.g. leo2 -> E) is
   actually broken.

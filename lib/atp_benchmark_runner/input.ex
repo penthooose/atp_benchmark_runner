@@ -5,10 +5,10 @@ defmodule AtpBenchmarkRunner.Input do
   A prover's `input` field (declared in `priv/provers/<name>/prover.exs`)
   selects how a TPTP problem is fed to the prover:
 
-    * `:tptp`  (default) — the raw TPTP `.p` file is used as-is
-    * `:smt2`  — the problem is converted to SMT-LIB v2 first (e.g. cvc5)
-    * `:thf`   — FOF/CNF/TFF is converted to Lash-safe THF first (e.g. lash)
-    * `{:custom, Mod}` — delegate input preparation to `Mod`:
+    * `:tptp`  (default) - the raw TPTP `.p` file is used as-is
+    * `:smt2`  - the problem is converted to SMT-LIB v2 first (e.g. cvc5)
+    * `:thf`   - FOF/CNF/TFF is converted to Lash-safe THF first (e.g. lash)
+    * `{:custom, Mod}` - delegate input preparation to `Mod`:
         - `Mod.local_mount(path)`        -> `{mount_dir, mount_file}`
         - `Mod.remote_input_path(path)`  -> the input path for the HPC task
         - `Mod.convert(path)`            -> `:ok` after writing a converted file
@@ -115,7 +115,7 @@ defmodule AtpBenchmarkRunner.Input do
   def needs_conversion?(%Prover{input: :tptp}), do: false
   def needs_conversion?(%Prover{input: _}), do: true
 
-  # ── internals ──────────────────────────────────────────────────────────────
+  # internals
 
   defp local_smt_path(problem_path) do
     smt_dir = Config.smt_tmp_dir()

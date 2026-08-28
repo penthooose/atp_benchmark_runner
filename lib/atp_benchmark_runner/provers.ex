@@ -5,7 +5,7 @@ defmodule AtpBenchmarkRunner.Provers do
   Every prover is declared declaratively in `priv/provers/<name>/prover.exs`
   (next to its `Containerfile` and `apptainer.def`). The registry discovers
   provers by scanning that directory, so adding a prover is just dropping a
-  new `priv/provers/<name>/` directory — no code changes or central lists.
+  new `priv/provers/<name>/` directory, with no code changes or central lists.
   """
 
   alias AtpBenchmarkRunner.Prover

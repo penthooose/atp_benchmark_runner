@@ -2,31 +2,24 @@ defmodule AtpBenchmarkRunner.Visualize do
   @moduledoc """
   Mermaid-based visualizations for ATP results and reports.
 
-  This is the visual companion to `AtpBenchmarkRunner.explain/1` and
-  `AtpBenchmarkRunner.explain_full/1`. Every builder returns a **raw Mermaid
-  diagram string** so the output can be embedded in a Livebook markdown cell,
-  saved as an `.mmd` file, or rendered directly with `render/2` (a
-  `Kino.Mermaid` inside Livebook, a fenced code block everywhere else).
+  Every builder returns a raw Mermaid diagram string, so the output can be
+  embedded in a Livebook markdown cell, saved as an `.mmd` file, or rendered
+  with `render/2` (a `Kino.Mermaid` inside Livebook, a fenced code block
+  elsewhere).
 
-  ## Why Mermaid instead of eflambe flame graphs?
-
-  eflambe profiles the Erlang/Elixir VM. Our reference provers (E, Vampire,
-  cvc5, Zipperposition, Leo2, Leo3, lash) run as **external OS processes** via
-  Docker/Apptainer, so there is no BEAM to profile. Even `:tableaux` runs as a
-  separate escript VM. Mermaid diagrams, by contrast, are generated purely from
-  data the runner already records (statuses, wall times, parsed proof clauses),
-  render natively in Livebook via `Kino.Mermaid`, and add no runtime dependency.
-  The closest data-driven analogue of a flame graph — a wall-time bar chart per
-  problem — is provided by `timeline/2`.
+  The reference provers (E, Vampire, cvc5, ...) run as external OS processes,
+  so there is no BEAM to profile with eflambe. Mermaid diagrams are generated
+  purely from data the runner already records (statuses, wall times, parsed
+  proof clauses), render natively in Livebook, and add no runtime dependency.
 
   ## Diagram types
 
-    * `result/2` — one flowchart per `Result` (prover → problem → status → timing)
-    * `proof/2` — proof dependency DAG for machine-readable refutations
+    * `result/2` - one flowchart per `Result` (prover -> problem -> status -> timing)
+    * `proof/2` - proof dependency DAG for machine-readable refutations
       (E/Vampire-style TPTP clauses); pipeline fallback otherwise
-    * `status_pie/2` — SZS status distribution (per prover or whole run)
-    * `timeline/2` — wall-time bar chart across problems (flame-graph flavour)
-    * `report/2` — aggregated run scoreboard
+    * `status_pie/2` - SZS status distribution (per prover or whole run)
+    * `timeline/2` - wall-time bar chart across problems (flame-graph flavour)
+    * `report/2` - aggregated run scoreboard
 
   Prefer the top-level `AtpBenchmarkRunner.visualize/2` /
   `AtpBenchmarkRunner.visualize_proof/2` entries, which render for the current
@@ -77,8 +70,8 @@ defmodule AtpBenchmarkRunner.Visualize do
 
   ## Options
 
-    * `:max_nodes` — cap on rendered steps to keep large proofs readable
-      (default: 60). Extra steps are omitted with a note.
+    * `:max_nodes` - cap on rendered steps to keep large proofs readable
+      (default: 60); extra steps are omitted with a note.
   """
   @spec proof(Result.t(), keyword()) :: binary()
   def proof(%Result{} = r, opts \\ []) do
@@ -115,7 +108,7 @@ defmodule AtpBenchmarkRunner.Visualize do
   @doc """
   Renders wall times as a Mermaid gantt (one section per problem, one bar per
   prover). This is the closest data-driven analogue of a flame graph for
-  benchmark runs — it shows at a glance where wall time went.
+  benchmark runs; it shows at a glance where wall time went.
 
   Pass `prover: :eprover` to chart a single prover. Bars are in whole seconds
   (mermaid gantt does not reliably render fractional seconds).
@@ -212,7 +205,7 @@ defmodule AtpBenchmarkRunner.Visualize do
   @spec available?() :: boolean()
   def available?, do: kino_available?()
 
-  # ── Proof DAG ─────────────────────────────────────────────────────────────
+  # Proof DAG
 
   defp proof_dag(_r, graph, max_nodes) do
     steps = graph.steps
@@ -271,11 +264,11 @@ defmodule AtpBenchmarkRunner.Visualize do
     |> String.trim()
   end
 
-  # ── Helpers ───────────────────────────────────────────────────────────────
+  # Helpers
 
   defp pie_title(results) do
     case results |> Enum.map(& &1.prover) |> Enum.uniq() do
-      [prover] -> "SZS status distribution — #{prover}"
+      [prover] -> "SZS status distribution (#{prover})"
       _ -> "SZS status distribution (all provers)"
     end
   end

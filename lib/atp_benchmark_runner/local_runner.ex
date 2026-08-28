@@ -37,7 +37,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
   @doc """
   Returns a human-readable summary of the local execution environment
-  (detection plus per-prover image status) — one call for the notebook.
+  (detection plus per-prover image status) in one call for the notebook.
   """
   @spec image_status_summary() :: binary()
   def image_status_summary do
@@ -71,7 +71,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
   @doc """
   Prints the local execution environment summary (detection + per-prover image
-  status) directly — one call for the notebook.
+  status) directly in one call for the notebook.
   """
   @spec print_image_status_summary() :: :ok
   def print_image_status_summary, do: IO.puts(image_status_summary())
@@ -98,7 +98,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
         :unavailable
 
       %{docker_image: img} ->
-        # Strip default registry prefix — Docker Desktop stores images without it
+        # Strip the default registry prefix; Docker Desktop stores images without it
         query_tag = String.replace_prefix(img, "docker.io/", "")
 
         case run_cmd("docker", ["images", "-q", query_tag], []) do
@@ -244,7 +244,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   @doc """
   Builds (or pulls) images for all given provers in one call.
 
-  `backend` selects the local build tool: `:auto` (default — Docker if
+  `backend` selects the local build tool: `:auto` (default, Docker if
   available, else Apptainer), `:docker`, or `:apptainer`. Set `force: true`
   to rebuild every image even if already present.
 
@@ -338,13 +338,13 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
   ## Options
 
-    * `:timeout_seconds` — per-problem wall time limit (default: 60)
-    * `:include_raw_output` — include full stdout in results (default: false)
-    * `:verbose` — print Docker CLI invocations (default: false)
-    * `:auto_ensure_images` — automatically pull/build missing Docker images
+    * `:timeout_seconds` - per-problem wall time limit (default: 60)
+    * `:include_raw_output` - include full stdout in results (default: false)
+    * `:verbose` - print Docker CLI invocations (default: false)
+    * `:auto_ensure_images` - automatically pull/build missing Docker images
       before running (default: false). When true, the build/pull output is
       printed to stdout so you can see progress during a benchmark run.
-    * `:execution_strategy` — execution pattern: `:sequential_containers`
+    * `:execution_strategy` - execution pattern: `:sequential_containers`
       (default) runs all problems for one prover before switching to the next
 
   ## Examples
@@ -372,9 +372,8 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     auto_ensure = Keyword.get(opts, :auto_ensure_images, false)
     execution_strategy = Keyword.get(opts, :execution_strategy, :sequential_containers)
 
-    # Pre-build/pull images for all containerized provers. Provers that run via
-    # a local escript (declared `local_execution: :escript` — e.g. tableaux)
-    # need no image. `:backend` and `:force` flow through.
+    # Pre-build/pull images for all containerized provers. Escript-based provers
+    # (`local_execution: :escript`, e.g. tableaux) need no image.
     if auto_ensure do
       build_images!(
         Enum.reject(provers, &(&1.local_execution != :container)),
@@ -385,8 +384,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
     case execution_strategy do
       :sequential_containers ->
-        # Run all problems for one prover before switching to next prover
-        # This reduces container loading times since each container starts once
+        # Run all problems per prover so each container is loaded only once.
         Enum.flat_map(provers, fn prover ->
           compatible = filter_compatible_problems(prover, problems)
 
@@ -395,7 +393,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
             skipped = Enum.reject(problems, &MapSet.member?(skipped_ids, &1.id))
 
             IO.puts(
-              "   ⚠ #{prover.name}: skipping #{length(skipped)} problem(s) (incompatible logic — UnsupportedLogic)"
+              "   ⚠ #{prover.name}: skipping #{length(skipped)} problem(s) (incompatible logic: UnsupportedLogic)"
             )
 
             skipped_results =
@@ -682,8 +680,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   # Runs a containerized prover through the local Apptainer binary. The problem
   # (or converted SMT/THF input) is bind-mounted to /problems, matching the
   # Docker path so the same command templates work on Linux/macOS.
-  defp run_apptainer(prover, problem_path, timeout_seconds, verbose) do
-    problem_id = Path.rootname(problem_path) |> Path.basename()
+  defp run_apptainer(prover, problem_path, timeout_seconds, verbose) do    problem_id = Path.rootname(problem_path) |> Path.basename()
     sif_path = local_sif_path(prover)
 
     {mount_dir, mount_file} = Input.local_mount(prover, problem_path)
@@ -726,7 +723,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     case System.find_executable(exe) do
       nil ->
         {:gaveup,
-         "Executable '#{exe}' not found on PATH. Docker is not running either — provers require Apptainer, Docker, or native binaries."}
+         "Executable '#{exe}' not found on PATH. Docker is not running either; provers require Apptainer, Docker, or native binaries."}
 
       _ ->
         wall_start = System.monotonic_time(:millisecond)
@@ -801,13 +798,12 @@ defmodule AtpBenchmarkRunner.LocalRunner do
        ) do
     problem_id = Path.rootname(problem_path) |> Path.basename()
 
-    # Generic input preparation: the prover's `input` field decides whether the
-    # raw `.p` is used or a converted SMT-LIB/THF file is produced first.
+    # Input preparation depends on the prover's `input` field: either the raw
+    # `.p` is used or a converted SMT-LIB/THF file is produced first.
     {mount_dir, mount_file} =
       Input.local_mount(prover, problem_path)
       |> then(fn {dir, file} -> {docker_path(dir), file} end)
 
-    # Build Docker args from the prover's command template
     rest =
       prover.command_template
       |> String.replace_prefix("apptainer exec ", "")
@@ -910,9 +906,9 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   @doc false
   def infer_tableaux_szs(output, exit_status) do
     cond do
-      # The AISE tableaux solver emits its own authoritative `% SZS status` line.
-      # Its internal log lines (e.g. `status: SAT` when a theorem is not refuted)
-      # must NOT override that explicit status, so read the raw token first.
+      # The tableaux solver emits its own authoritative `% SZS status` line. Its
+      # internal log lines (e.g. `status: SAT`) must not override it, so the raw
+      # token is read first.
       status = Result.explicit_szs_status(output) ->
         status
 
@@ -944,7 +940,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
           (String.contains?(output, "UNSAT") and not String.contains?(output, "SAT")) ->
         "Unsatisfiable"
 
-      # Generic theorem text (must NOT match bare "true" — too many false positives)
+      # Generic theorem text (must not match bare "true", too many false positives)
       String.contains?(output, "theorem") or
         String.contains?(output, "Theorem") or
           String.contains?(output, "valid") ->
@@ -1005,9 +1001,9 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
   Driven by the prover spec's `supports` map:
 
-    * `supports.forms` — a list of logic prefixes (`[:cnf, :fof, ...]`) filters
+    * `supports.forms` - a list of logic prefixes (`[:cnf, :fof, ...]`) filters
       by the problem's logic; `:all` (default) keeps everything.
-    * `supports.requires_conjecture?` — when `true`, skips Satisfiable problems
+    * `supports.requires_conjecture?` - when `true`, skips Satisfiable problems
       with no conjecture (refutation provers such as Lash cannot determine
       plain Satisfiable from axioms alone). THF problems are always kept.
   """
@@ -1073,14 +1069,14 @@ defmodule AtpBenchmarkRunner.LocalRunner do
       requires_conjecture? and not has_conjecture?(problem.path) and
           problem.expected_status == "Satisfiable" ->
         "#{prover.label} is a refutation prover; #{problem.name} has no conjecture and is " <>
-          "Satisfiable — it cannot determine satisfiability."
+          "Satisfiable; it cannot determine satisfiability."
 
       true ->
         "#{prover.label} is incompatible with #{problem.name} (#{logic})."
     end
   end
 
-  # ── Lash compatibility helpers ──────────────────────────────────────────────
+  # Lash compatibility helpers
 
   @doc false
   def lash_compatible?(%Problem{logic: logic, path: path, expected_status: expected})
@@ -1092,9 +1088,8 @@ defmodule AtpBenchmarkRunner.LocalRunner do
         true
 
       not has_conjecture?(path) and expected == "Satisfiable" ->
-        # Lash is a refutation prover — without a conjecture it can only
-        # detect Unsatisfiable (axiom contradictions). It cannot determine
-        # plain Satisfiable from axioms alone.
+        # Without a conjecture a refutation prover can only detect Unsatisfiable
+        # (axiom contradictions), not plain Satisfiable.
         false
 
       true ->
@@ -1108,7 +1103,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
   def has_function_symbols?(path) do
     content = File.read!(path)
 
-    # Remove comments and blank lines, join into one flat line
+    # Strip comments and blank lines, join into one flat line
     flat =
       content
       |> String.split(~r/[\r\n]+/)
@@ -1116,11 +1111,8 @@ defmodule AtpBenchmarkRunner.LocalRunner do
       |> Enum.reject(&(String.starts_with?(&1, "%") or &1 == ""))
       |> Enum.join(" ")
 
-    # Strip formula headers (fof|cnf|tff|thf(name, role, ) leaving only body content)
-    # This avoids matching TPTP formula names like `some_identity(` in
-    # `fof(some_identity, axiom, ...)`.
-    # The replacement leaves unbalanced content (extra ) and .) but that's fine
-    # for the regex scan — we only care about `word(` patterns.
+    # Drop formula headers so names like `some_identity(` inside
+    # `fof(some_identity, axiom, ...)` do not match as function symbols.
     body_only =
       Regex.replace(
         ~r/(?:fof|cnf|tff|thf)\(\s*[^,]+?\s*,\s*[^,]+?\s*,\s*/,
@@ -1128,7 +1120,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
         ""
       )
 
-    # Scan remaining content for `word(` patterns (potential function symbols)
+    # Remaining `word(` patterns are candidate function symbols.
     matches = Regex.scan(~r/\b([a-z_][a-zA-Z0-9_]*)\s*\(/, body_only)
 
     Enum.any?(matches, fn [_, name] -> name not in @known_supported_logics end)

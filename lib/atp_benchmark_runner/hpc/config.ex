@@ -45,7 +45,7 @@ defmodule AtpBenchmarkRunner.HPC.Config do
     partition = string_value(opts, :partition, "PARTITION", "cpu")
     total_cpus = __MODULE__.node_total_cpus(session.cluster.name, partition)
 
-    # Dynamic resource probe (SSH) — opt-in via :dynamic_resources or env var.
+    # Dynamic resource probe (SSH), opt-in via :dynamic_resources or env var.
     dynamic_resources =
       bool_value(opts, :dynamic_resources, "DYNAMIC_RESOURCES", false)
 
@@ -154,41 +154,32 @@ defmodule AtpBenchmarkRunner.HPC.Config do
 
   def terminal_state?(_), do: false
 
-  # ── default_cpus ──────────────────────────────────────────────────────────
-  # Full node, sequential: all node CPUs. --exclusive + --cpus-per-task=total
-  # is needed because hpc_connect's normalize_apptainer_cpu_shape uses the
-  # cpus-per-task value to round up to full nodes (Helma: rounds up to 48-core
-  # chunks; nil → 1 → 48 instead of 384).
+  # Full node sequential uses all CPUs. --cpus-per-task must be set explicitly:
+  # hpc_connect's normalize_apptainer_cpu_shape rounds it up to full nodes
+  # (Helma: 48-core chunks, so nil would give 48 instead of 384).
   defp default_cpus(:single_node, :sequential, _max_parallel, _prover_count, :full, total),
     do: total
 
-  # Full node, parallel: spread CPUs across concurrent tasks so each one
-  # gets enough cores for multi-threaded provers (Leo-III --cores, E auto-schedule).
-  # --exclusive ensures the whole node is allocated regardless.
+  # Parallel mode spreads CPUs across concurrent tasks so multi-threaded provers
+  # (Leo-III --cores, E auto-schedule) still get enough cores each.
   defp default_cpus(:single_node, :parallel, max_parallel, _prover_count, :full, total),
     do: max(div(total, max(max_parallel, 1)), 1)
 
-  # Half node, sequential: one task uses half the node's CPUs.
   defp default_cpus(:single_node, :sequential, _max_parallel, _prover_count, :half, total),
     do: half_cpus(total)
 
-  # Half node, parallel: spread half the CPUs across concurrent tasks.
   defp default_cpus(:single_node, :parallel, max_parallel, _prover_count, :half, total) do
     max(div(half_cpus(total), max(max_parallel, 1)), 1)
   end
 
-  # Multi-node, full: prover gets its own exclusive node.
   defp default_cpus(:multi_node, _mode, _max_parallel, _prover_count, :full, total),
     do: total
 
-  # Multi-node, half: each prover uses half a node's CPUs.
   defp default_cpus(:multi_node, _mode, _max_parallel, _prover_count, :half, total),
     do: half_cpus(total)
 
-  # ── default_mem ───────────────────────────────────────────────────────────
-  # Mirror of default_cpus/6 but returns MB as a SLURM --mem string.
-  # Returns nil when --exclusive gives the full node (no explicit --mem needed).
-
+  # Same shapes as default_cpus/6 but as a SLURM --mem string in MB. nil when
+  # --exclusive covers the whole node and no explicit --mem is needed.
   defp default_mem(:single_node, :sequential, _max_parallel, _prover_count, :full, _ram),
     do: nil
 
@@ -209,42 +200,32 @@ defmodule AtpBenchmarkRunner.HPC.Config do
   defp default_mem(:multi_node, _mode, _max_parallel, _prover_count, :half, ram),
     do: "#{half_cpus(ram)}M"
 
-  # ── default_nodes ─────────────────────────────────────────────────────────
-  # No explicit --nodes; SLURM auto-determines nodes from --cpus-per-task.
-  # See sbatch.interactive.helma_cpu and sbatch.interactive.fritz_cpu.
+  # No explicit --nodes; SLURM derives them from --cpus-per-task.
   defp default_nodes(_mode), do: nil
 
-  # ── default_exclusive ─────────────────────────────────────────────────────
-  # Full node: always exclusive — we want the entire node.
+  # Full node requests the whole node exclusively; half node shares it.
   defp default_exclusive(_mode, _seq_or_par, :full), do: true
-
-  # Half node: share the node with other jobs.
   defp default_exclusive(_mode, _seq_or_par, :half), do: false
 
-  # ── cluster_default_node_size ─────────────────────────────────────────────
-  # Default to half nodes for efficient cluster use; users can override.
   defp cluster_default_node_size(_cluster), do: :full
 
-  # ── node_total_cpus (public for NodeResources fallback) ──────────────────
-  # Helma CPU partition: 2 × AMD Turin ("Zen5c"), 192 cores each = 384 total.
+  # Public for the NodeResources fallback.
+  # Helma CPU partition: 2 x AMD Turin, 192 cores each = 384 total.
   def node_total_cpus(:helma, "cpu"), do: 384
   def node_total_cpus(:helma, _partition), do: 384
 
-  # Fritz Ice Lake nodes (singlenode / multinode): 2 × 36 cores = 72 total.
+  # Fritz Ice Lake (singlenode / multinode): 2 x 36 = 72. Sapphire Rapids
+  # (spr1tb / spr2tb): 2 x 52 = 104.
   def node_total_cpus(:fritz, "singlenode"), do: 72
   def node_total_cpus(:fritz, "multinode"), do: 72
-
-  # Fritz Sapphire Rapids nodes (spr1tb / spr2tb): 2 × 52 cores = 104 total.
   def node_total_cpus(:fritz, "spr1tb"), do: 104
   def node_total_cpus(:fritz, "spr2tb"), do: 104
 
-  # Fritz fallback (default partition is singlenode).
+  # Fallback (default partition is singlenode); conservative default for
+  # unknown clusters.
   def node_total_cpus(:fritz, _partition), do: 72
-
-  # Unknown cluster: conservative fallback.
   def node_total_cpus(_cluster, _partition), do: 128
 
-  # ── helpers ───────────────────────────────────────────────────────────────
   defp half_cpus(total), do: max(div(total, 2), 1)
 
   defp atom_value(opts, key, env_suffix, default, allowed) do

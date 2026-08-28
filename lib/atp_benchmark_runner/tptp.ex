@@ -76,20 +76,20 @@ defmodule AtpBenchmarkRunner.TPTP do
 
   Each name is resolved in two steps:
 
-  1. **Official server** — fetched individually from the TPTP SeeTPTP CGI
+  1. **Official server** - fetched individually from the TPTP SeeTPTP CGI
      (`https://tptp.org/cgi-bin/SeeTPTP?Category=Problems&File=...`) and written
      to its archive-consistent path `<tptp_root>/Problems/<DOMAIN>/<NAME>.p`
      (axioms to `<tptp_root>/Axioms/<DOMAIN>/<NAME>.ax`), the same layout as an
      unpacked archive.
-  2. **Local fallback (default on)** — a name the server does not have (e.g. a
+  2. **Local fallback (default on)** - a name the server does not have (e.g. a
      bundled smoke example that is not a real TPTP problem, or a renumbered
      name) is looked up in local sources instead of being declared unavailable:
-     user examples dir → individually-downloaded dir → bundled examples
-     (`priv/tptp_examples`, auto-copied into the bundled tmp dir on first use)
-     → installed TPTP root. If found, it is returned from its existing path —
-     bundled smoke examples become usable from the bundled tmp dir **without
-     being copied into `<tptp_root>/Problems/`**, so the real library is never
-     polluted with stub files.
+     user examples dir, individually-downloaded dir, bundled examples
+     (`priv/tptp_examples`, auto-copied into the bundled tmp dir on first use),
+     then the installed TPTP root. If found, it is returned from its existing
+     path; bundled smoke examples become usable from the bundled tmp dir
+     without being copied into `<tptp_root>/Problems/`, so the real library is
+     never polluted with stub files.
 
   Only names found in *neither* the server nor any local source become
   `%{name: ..., reason: {:not_found_anywhere, name}}` warnings. Set
@@ -172,10 +172,10 @@ defmodule AtpBenchmarkRunner.TPTP do
         {:error, {:not_found_anywhere, Path.basename(name)}}
 
       path ->
-        # Return the resolved local path as-is (e.g. the bundled examples tmp
-        # dir, a user-dropped file, or an installed TPTP root). Deliberately no
-        # copy into <tptp_root>/Problems/ so bundled smoke stubs never pollute
-        # the real library.
+        # Return the resolved local path as-is (bundled examples tmp dir, a
+        # user-dropped file, or an installed TPTP root). No copy into
+        # <tptp_root>/Problems/ so bundled smoke stubs never pollute the real
+        # library.
         {:ok, path}
     end
   end
@@ -244,10 +244,10 @@ defmodule AtpBenchmarkRunner.TPTP do
   Resolves a TPTP problem name to an actual file path.
 
   Searches in order:
-    1. The user examples tmp dir (`./tmp/tptp_user_examples/`) — highest priority
+    1. The user examples tmp dir (`./tmp/tptp_user_examples/`, highest priority)
     2. Individually downloaded problems (`<tptp_root>/Problems/<DOMAIN>/<name>`,
-       `<tptp_root>/Axioms/<DOMAIN>/<name>` — see `download_problems/2`)
-    3. The bundled examples tmp dir (`./tmp/tptp_examples/`) — fast, no index needed
+       `<tptp_root>/Axioms/<DOMAIN>/<name>`, see `download_problems/2`)
+    3. The bundled examples tmp dir (`./tmp/tptp_examples/`, fast, no index needed)
     4. The configured TPTP library root (`Problems/<domain>/<name>`, `Axioms/<domain>/<name>`)
     5. The legacy bundled `priv/tptp_examples/` directory
     6. As a direct file path
@@ -299,7 +299,7 @@ defmodule AtpBenchmarkRunner.TPTP do
   def select(opts \\ []) do
     names =
       cond do
-        # Plain list of strings → bare name list
+        # Plain list of strings (bare name list)
         Keyword.keyword?(opts) == false and is_list(opts) -> opts
         # Keyword list with :names key
         Keyword.has_key?(opts, :names) -> Keyword.fetch!(opts, :names)
@@ -395,9 +395,9 @@ defmodule AtpBenchmarkRunner.TPTP do
   end
 
   @doc false
-  # Builds and caches a name→path index of all TPTP files under the library root.
-  # Persisted as JSON on disk (survives kernel restarts) and cached in memory
-  # via process dictionary (avoids re-reading the file for every name lookup).
+  # Builds and caches a name-to-path index of all TPTP files under the library
+  # root. Persisted as JSON on disk (survives kernel restarts) and cached in
+  # memory via process dictionary (avoids re-reading the file per lookup).
   def file_index(root) when is_binary(root) do
     cache_key = {:tptp_file_index, root}
 
@@ -483,8 +483,8 @@ defmodule AtpBenchmarkRunner.TPTP do
         %{}
       end
 
-    # User examples dir — merged LAST so its entries override any duplicates
-    # from archive or bundled sources.
+    # User examples dir, merged last so its entries override duplicates from
+    # archive or bundled sources.
     user_index =
       if File.dir?(Config.user_examples_dir()) do
         Config.user_examples_dir()

@@ -112,7 +112,7 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
 
     START_EPOCH_MS=$(date +%s%3N)
 
-    # Run command in background and track peak RSS via ps monitoring loop.
+      # Run command in background, monitor peak RSS via ps.
     # Redirect stdin from /dev/null defensively (no task file is fed here, but
     # it guarantees the prover never blocks on or consumes inherited stdin).
     PEAK_RSS_KB=0
@@ -155,9 +155,9 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
   """
   @spec single_node_tasks(Run.t(), keyword()) :: binary()
   def single_node_tasks(%Run{} = run, opts \\ []) do
-    # Interleave by problem first so all provers get fair parallel starting slots.
-    # Before (grouped): vampire/p1,vampire/p2,...,cvc5/p1,cvc5/p2,... — vampire fills all slots first.
-    # After (interleaved): vampire/p1,cvc5/p1,eprover/p1,...,vampire/p2,cvc5/p2,... — fair across provers.
+    # Interleave by problem first so all provers get fair starting slots:
+    # vampire/p1,cvc5/p1,eprover/p1,...,vampire/p2,cvc5/p2,... instead of
+    # vampire filling every slot before the others start.
     run.problems
     |> Enum.flat_map(fn problem ->
       Enum.map(run.provers, fn prover ->
@@ -294,7 +294,7 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
       # Run command in background, monitor peak RSS via ps.
       # Redirect stdin from /dev/null so the apptainer subprocess does NOT
       # consume the while-read loop's tasks file (otherwise only the first
-      # task ever runs — subsequent reads hit EOF).
+      # task ever runs, subsequent reads hit EOF).
       timeout --preserve-status "${TIMEOUT_SECONDS}s" bash -lc "$command" < /dev/null > "$out_file" 2>&1 &
       cmd_pid=$!
 
@@ -373,11 +373,10 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     end)
   end
 
-  # Shell helper that appends the correct SZS status line when a prover produced
-  # no explicit `SZS status` marker. Handles SMT-LIB-style answers (sat/unsat/
-  # unknown — e.g. cvc5 in non-TPTP mode) and the AISE tableaux solver's report
-  # wording (`status: UNSAT` / `status: SAT`). Without this, such provers would
-  # be mislabelled `GaveUp` by the fallback even when they solved the problem.
+  # Appends the right SZS status when a prover emits no explicit marker: handles
+  # bare sat/unsat/unknown answers (cvc5 in SMT-LIB mode) and the tableaux
+  # solver's `status: UNSAT` / `status: SAT` wording. Without this such provers
+  # would be mislabelled `GaveUp` even when they solved the problem.
   defp szs_fallback_snippet do
     """
     write_szs_fallback() {
