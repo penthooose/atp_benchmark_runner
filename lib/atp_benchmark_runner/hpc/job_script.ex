@@ -3,7 +3,7 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
   Builds SLURM job-array scripts for prover/problem matrix runs.
   """
 
-  alias AtpBenchmarkRunner.{Input, Prover, Run}
+  alias AtpBenchmarkRunner.{Input, Problem, Prover, Run}
   alias AtpBenchmarkRunner.HPC.Shell
 
   @doc """
@@ -149,9 +149,11 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
   @doc """
   Builds the TSV task list consumed by the single-node batch script.
 
-  The input path per (prover, problem) is derived from the prover's `input`
-  field: `:smt2`/`:thf` provers get their converted path (`.smt2`/`_thf.p`),
-  all others consume the raw `.p` file.
+  The input path per (prover, problem) is the one `Input.plan/3` prepared and
+  `HPC.Runner.sync_problems/3` uploaded, recorded in
+  `run.metadata.prepared_inputs`. Deriving it here from the prover's `input`
+  field alone is what fed THF problems through the Lash converter; the fallback
+  only serves manifests written before prepared paths existed.
   """
   @spec single_node_tasks(Run.t(), keyword()) :: binary()
   def single_node_tasks(%Run{} = run, opts \\ []) do
@@ -160,9 +162,10 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     # vampire filling every slot before the others start.
     run.problems
     |> Enum.flat_map(fn problem ->
-      Enum.map(run.provers, fn prover ->
+      run.provers
+      |> Enum.map(fn prover ->
         command = runtime_command(prover, run.problem_timeout_seconds, opts)
-        problem_path = Input.remote_input_path(prover, problem)
+        problem_path = prepared_input_path(run, prover, problem)
 
         [
           Atom.to_string(prover.name),
@@ -175,6 +178,21 @@ defmodule AtpBenchmarkRunner.HPC.JobScript do
     end)
     |> Enum.join("\n")
     |> Kernel.<>("\n")
+  end
+
+  @doc """
+  The prepared input path for a (prover, problem) pair, or the derived path for
+  a manifest without one.
+  """
+  @spec prepared_input_path(Run.t(), Prover.t(), Problem.t()) :: binary()
+  def prepared_input_path(%Run{} = run, %Prover{} = prover, %Problem{} = problem) do
+    run.metadata
+    |> Input.metadata(:prepared_inputs, %{})
+    |> Map.get("#{prover.name}|#{problem.id}")
+    |> case do
+      nil -> Input.remote_input_path(prover, problem)
+      path -> path
+    end
   end
 
   @doc """

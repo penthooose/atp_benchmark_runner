@@ -49,48 +49,6 @@ defmodule AtpBenchmarkRunner.TPTP.ToTHF do
     end
   end
 
-  @doc """
-  Converts a TPTP file to THF, returns `{output_path, content}`.
-  """
-  @spec convert_file(binary(), keyword()) :: {binary(), binary()}
-  def convert_file(path, opts \\ []) do
-    content = File.read!(path)
-    converted = convert_string(content)
-    out_dir = Keyword.get(opts, :output_dir, Path.dirname(path))
-    base = Path.basename(path, ".p")
-    out = Path.join(out_dir, "#{base}_thf.p")
-    File.write!(out, converted)
-    {out, converted}
-  end
-
-  @doc """
-  Returns the path to a THF-converted problem for Lash. Always converts, even
-  already-THF problems need the Lash-safe emission (explicit `@` and
-  parenthesized equations), so the old "copy if already THF" shortcut is gone.
-  """
-  @spec ensure_thf(binary(), atom(), keyword()) :: binary()
-  def ensure_thf(path, prover, opts \\ [])
-
-  def ensure_thf(path, :lash, opts) do
-    out_dir = Keyword.get(opts, :output_dir, Path.dirname(path))
-    File.mkdir_p!(out_dir)
-    base = Path.basename(path, ".p")
-    out = Path.join(out_dir, "#{base}_thf.p")
-    {^out, _} = convert_file(path, output_dir: out_dir)
-    out
-  end
-
-  def ensure_thf(path, _prover, _opts), do: path
-
-  @doc """
-  Returns true if the problem needs THF conversion (is not already THF).
-  """
-  @spec needs_conversion?(binary()) :: boolean()
-  def needs_conversion?(path) do
-    content = File.read!(path)
-    not String.match?(content, ~r/^% SPC.*THF/m)
-  end
-
   # Header
 
   defp split_header(lines) do

@@ -16,7 +16,10 @@ defmodule AtpBenchmarkRunner.ProverSpecTest do
 
     test "loads per-prover behavior hooks from the spec" do
       assert %Prover{input: :smt2, parser: :smt_bare} = Prover.builtin!(:cvc5)
-      assert %Prover{input: :thf, parser: :szs} = Prover.builtin!(:lash)
+
+      assert %Prover{input: {:to_thf, :lash}, accepts: [:thf], parser: :szs} =
+               Prover.builtin!(:lash)
+
       assert %Prover{input: :tptp, parser: :szs} = Prover.builtin!(:vampire)
       assert Prover.builtin!(:lash).supports.requires_conjecture? == true
       assert Prover.builtin!(:vampire).supports.requires_conjecture? == false

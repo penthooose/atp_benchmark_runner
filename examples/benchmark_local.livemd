@@ -20,14 +20,22 @@ IO.puts("  THF temp dir:   #{AtpBenchmarkRunner.Config.thf_tmp_dir()}")
 ```
 
 This notebook is the local counterpart to `benchmark_hpc.livemd`. It runs the
-same prover images (via Docker or Apptainer) and applies the same
-input preparation as on the cluster:
+same prover images (via Docker or Apptainer) and applies the same input
+preparation as on the cluster. Input is decided per (prover, problem) pair:
 
-- **`:cvc5`** - problems are converted to SMT-LIB (`TPTPToSMT`) before cvc5 sees
-  them (cvc5 has no TPTP input dialect); its bare `sat`/`unsat`/`unknown` answer
-  is mapped to an SZS status.
-- **`:lash`** - FOF/CNF/TFF problems are converted to THF (`TPTP.ToTHF`) because
-  lash is a THF-`$o`-only prover.
+- **includes** are expanded first, so a problem that names axiom sets is run
+  with those axioms instead of without them.
+- **THF problems are passed through untouched** for THF provers (`shot_tx`,
+  `lash`). Their `accepts` declaration is what makes this happen, so no Lash
+  output rewriting reaches a TPTP-compliant prover.
+- **`:cvc5`** receives FOF/CNF problems converted to SMT-LIB (`TPTPToSMT`)
+  (cvc5 has no TPTP input dialect); its bare `sat`/`unsat`/`unknown` answer is
+  mapped to an SZS status. TFF/THF are reported as `InputError`: the SMT encoding
+  is first-order, so answering those would answer a different question.
+- **`:lash`** and **`:shot_tx`** receive FOF/CNF/TFF converted to THF
+  (`TPTP.ToTHF`), since both are THF-only.
+- A converted problem that lost a statement, or input no prover can read, is
+  recorded as `InputError` with the reason instead of being run.
 - All other provers read the TPTP file directly.
 
 ---

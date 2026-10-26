@@ -15,20 +15,19 @@ defmodule AtpBenchmarkRunner.TPTP.Index do
 
   @doc """
   Detects the actual TPTP library root below a configured directory.
+
+  A complete unpacked archive (`TPTP-v<version>/`) wins over a flat tree, because
+  the flat tree is what single downloads build up and it can hold a partial or
+  mis-fetched copy of a file the archive has in full.
   """
   @spec library_root(binary()) :: binary()
   def library_root(root_dir) when is_binary(root_dir) do
     root_dir = Path.expand(root_dir)
 
     cond do
-      File.dir?(Path.join(root_dir, "Problems")) ->
-        root_dir
-
-      detected = detect_versioned_root(root_dir) ->
-        detected
-
-      true ->
-        root_dir
+      detected = detect_versioned_root(root_dir) -> detected
+      File.dir?(Path.join(root_dir, "Problems")) -> root_dir
+      true -> root_dir
     end
   end
 
@@ -52,11 +51,14 @@ defmodule AtpBenchmarkRunner.TPTP.Index do
   end
 
   # Exclude generated derivative files that are not original TPTP problems:
-  #   _thf.p   → Lash THF conversion output (generated during pre-convert)
-  #   .smt2    → CVC5 SMT conversion output (generated during pre-convert)
+  #   _thf.p      → Lash THF conversion output (generated during pre-convert)
+  #   .smt2       → CVC5 SMT conversion output (generated during pre-convert)
+  #   _expanded.p → include-expanded copy of a problem
   defp ignore_file?(path) do
     basename = Path.basename(path)
-    String.ends_with?(basename, "_thf.p") or String.ends_with?(basename, ".smt2")
+
+    String.ends_with?(basename, "_thf.p") or String.ends_with?(basename, ".smt2") or
+      String.ends_with?(basename, "_expanded.p")
   end
 
   @doc """

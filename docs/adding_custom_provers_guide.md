@@ -24,10 +24,10 @@ SPASS, GKC, Darwin, …) and needs **no extra configuration**.
 The two special cases already in the repo show how _non_-TPTP-native input is
 handled **in-repo** via Elixir hooks:
 
-| Prover | `input` | `parser`    | Why                                             |
-| ------ | ------- | ----------- | ----------------------------------------------- |
-| cvc5   | `:smt2` | `:smt_bare` | cvc5 has no TPTP dialect; prints bare sat/unsat |
-| lash   | `:thf`  | —           | lash accepts THF only                           |
+| Prover | `input`            | `accepts`       | `converts`      | `parser`    | Why                                               |
+| ------ | ------------------ | --------------- | --------------- | ----------- | ------------------------------------------------- |
+| cvc5   | `:smt2`            | (none)          | `FOF, CNF`      | `:smt_bare` | cvc5 has no TPTP dialect; prints bare sat/unsat   |
+| lash   | `{:to_thf, :lash}` | `THF, TH0, TH1` | `FOF, CNF, TFF` | —           | THF is read as-is; first-order input is converted |
 
 **Recommendation:** for now, integrate TPTP-native provers. The extension path
 for custom conversion/parsing by non-Elixir contributors is a roadmap item (see
@@ -48,7 +48,8 @@ spec cannot silently carry unused or misspelled fields.
 | `label`                     |          | Display name (GUI dropdown, reports); defaults to humanized `name`                                                                   |
 | `aliases`                   |          | Alternate lookup names, e.g. `["e", "e_prover"]` for eprover                                                                         |
 | `sif_name`                  |          | SIF/image name when it differs from `name` (e.g. tableaux → `simple_tableaux_solver`)                                                |
-| `input`                     |          | `:tptp` (default), `:smt2`, `:thf`, `{:custom, Mod}`                                                                                 |
+| `input`                     |          | `:tptp` (default), `:smt2`, `{:to_thf, flavour}`, `{:custom, Mod}`: what the prover is fed                                           |
+| `accepts`                   |          | `:all` (default for `:tptp`), `[]` (default otherwise) or TPTP languages such as `["THF", "TH0", "TH1"]`                             |
 | `parser`                    |          | `:szs` (default), `:smt_bare`, `{:custom, Mod}`                                                                                      |
 | `local_execution`           |          | `:container` (default) or `:escript`: how the _local_ runner executes the prover (escript provers are skipped by local image builds) |
 | `our_prover`                |          | `true` marks the designated in-house prover; `Provers.our_prover/0` resolves it, so `Report`/`Compare` use it as the "ours" default  |
@@ -142,12 +143,34 @@ build issues; see [Troubleshooting](#8-troubleshooting-fauapptainer)).
 
 ## 4. Behavior hooks (only when non-default)
 
-### `input`: what the prover consumes
+### `input` and `accepts`: what the prover consumes
 
-- `:tptp` (default) - raw `.p` file.
-- `:smt2` - the runner converts TPTP to SMT-LIB first (cvc5).
-- `:thf` - the runner converts FOF/CNF/TFF to Lash-safe TH0 first (lash).
-- `{:custom, Mod}` - an Elixir module; **in-repo only** (see below).
+Input preparation is decided per **(prover, problem)** pair, because the same
+prover may read one dialect directly and need another converted
+(`AtpBenchmarkRunner.Input.prepare/3`):
+
+1. `include` directives are expanded first (no TPTP prover resolves them).
+2. The problem's dialect is detected from its statements plus the `% SPC :` form.
+3. If the dialect is in `accepts`, the problem is passed through **untouched**.
+4. Otherwise `input` declares the conversion, or the problem is skipped with an
+   `InputError` and a reason.
+5. Every conversion is followed by an integrity gate: a file that lost a
+   statement is rejected, never handed to the prover.
+
+- `accepts: :all` (default with `input: :tptp`) - takes whatever it is given.
+- `accepts: ["THF", "TH0", "TH1"]` - reads THF as-is (`TH0`/`TH1` denote the
+  same language family, so `"THF"` alone accepts all three).
+- `accepts: []` (default with any conversion) - always convert.
+- `input: :tptp` (default) - raw `.p` file.
+- `input: :smt2` - convert TPTP to SMT-LIB first (cvc5).
+- `input: {:to_thf, :lash}` - convert FOF/CNF/TFF to Lash-safe TH0 (lash,
+  shot_tx). Declaring `accepts` for THF alongside it is what keeps already-THF
+  problems from being rewritten into the Lash flavour.
+- `converts: ["FOF", "CNF"]` - only convert these dialects. A conversion is an
+  approximation, so a dialect it does not cover is reported as an `InputError`
+  instead of producing a verdict for a different question (cvc5 has no typed or
+  higher-order encoding, so THF/TFF are not converted).
+- `input: {:custom, Mod}` - an Elixir module; **in-repo only** (see below).
 
 ### `parser`: how the output is read
 

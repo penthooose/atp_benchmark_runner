@@ -80,9 +80,9 @@ defmodule AtpBenchmarkRunner.Problem do
       |> from_path(attrs)
       |> Map.put(:source, Keyword.get(attrs, :source, :local))
 
-    # Override logic from the SPC header when available. The file-name
-    # heuristic (separator to logic) is wrong for e.g. THF001+0.p (separator
-    # "+" maps to "FOF", but the SPC says "THF_THM_NEQ").
+    # The SPC header states the dialect precisely (TH0/TH1/THF), which the file
+    # name cannot: the separator heuristic in `TPTP.Index` maps "+" to "FOF", so
+    # THF001+0.p would otherwise be filed as first-order.
     case problem.metadata[:spc] do
       nil ->
         problem
@@ -99,16 +99,19 @@ defmodule AtpBenchmarkRunner.Problem do
   end
 
   @doc """
-  Parses `% Key : Value` metadata lines from TPTP headers.
+  Parses `% Key : value` metadata lines from a TPTP header.
+
+  Uses `Tptp.Header`, which implements the rules the TPTP states (continuation
+  lines, only the first colon dividing a line, a key written twice keeping its
+  last value). Headers without the dashed rules that open a real TPTP file are
+  still read by a lenient fallback, so hand-written examples keep their metadata.
   """
   @spec parse_tptp_header(binary()) :: map()
   def parse_tptp_header(content) when is_binary(content) do
-    content
-    |> String.split("\n")
-    |> Enum.take_while(
-      &(String.starts_with?(String.trim_leading(&1), "%") or String.trim(&1) == "")
-    )
-    |> Enum.reduce(%{}, &parse_header_line/2)
+    case Tptp.Header.from_string(content) do
+      {:ok, header, _diagnostics} -> header_to_map(header)
+      {:error, _reason} -> lenient_header(content)
+    end
   end
 
   @doc false
@@ -130,6 +133,68 @@ defmodule AtpBenchmarkRunner.Problem do
   @doc false
   @spec from_map(map()) :: t()
   def from_map(map), do: new(map)
+
+  # Header to the map shape the rest of the runner expects.
+
+  defp header_to_map(header) do
+    spc = Tptp.Header.spc(header)
+
+    %{}
+    |> put_present(:expected_status, header |> Tptp.Header.status() |> status_name())
+    |> put_present(:rating, header |> Tptp.Header.get("Rating") |> leading_rating())
+    |> put_present(:logic, spc_form(spc) || syntax_word(Tptp.Header.get(header, "Syntax")))
+    |> put_present(:domain, Tptp.Header.get(header, "Domain"))
+    |> put_present(:name, Tptp.Header.get(header, "Name"))
+    |> Map.put(:metadata, header_metadata(header, spc))
+  end
+
+  defp header_metadata(header, spc) do
+    %{}
+    |> put_present(:file, Tptp.Header.get(header, "File"))
+    |> put_present(:spc, Tptp.Header.get(header, "SPC"))
+    |> put_present(:description, Tptp.Header.get(header, "Problem"))
+    |> put_present(:description, Tptp.Header.get(header, "Axioms"))
+    |> put_present(:source_ref, Tptp.Header.get(header, "Source"))
+    |> put_present(:spc_form, spc_form(spc))
+    |> put_present(:spc_status, spc_status_name(spc))
+  end
+
+  defp status_name(nil), do: nil
+  defp status_name(status), do: Tptp.Szs.Ontology.name(status)
+
+  defp spc_form(%{form: form}) when is_binary(form) and form != "", do: form
+  defp spc_form(_spc), do: nil
+
+  defp spc_status_name(%{status: nil}), do: nil
+  defp spc_status_name(%{status: status}), do: Tptp.Szs.Ontology.name(status)
+  defp spc_status_name(_spc), do: nil
+
+  defp syntax_word(nil), do: nil
+  defp syntax_word(syntax), do: syntax |> String.split() |> List.first()
+
+  defp leading_rating(nil), do: nil
+
+  defp leading_rating(value) when is_binary(value) do
+    case Regex.run(~r/^\s*([01](?:\.\d+)?)/, value) do
+      [_, number] -> normalize_rating(number)
+      _ -> nil
+    end
+  end
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, _key, ""), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
+
+  # Lenient fallback for headers without the dashed rules that open a real TPTP
+  # file: hand-written examples and user-supplied problem files.
+  defp lenient_header(content) do
+    content
+    |> String.split("\n")
+    |> Enum.take_while(
+      &(String.starts_with?(String.trim_leading(&1), "%") or String.trim(&1) == "")
+    )
+    |> Enum.reduce(%{}, &parse_header_line/2)
+  end
 
   defp parse_header_line(line, acc) do
     with [key, value] <-

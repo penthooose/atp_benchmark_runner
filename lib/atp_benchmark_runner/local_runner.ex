@@ -13,6 +13,9 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
   alias AtpBenchmarkRunner.{Config, Input, Problem, Prover, Result}
 
+  # Slack a container gets beyond its own time flag before it is killed.
+  @docker_grace_ms 10_000
+
   @doc """
   Returns a map of available execution methods on this machine.
 
@@ -384,6 +387,10 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
     case execution_strategy do
       :sequential_containers ->
+        # One preparation pass for the whole run: includes are expanded once per
+        # problem, and every (prover, problem) pair's input is decided up front.
+        input_plan = Input.plan(provers, problems)
+
         # Run all problems per prover so each container is loaded only once.
         Enum.flat_map(provers, fn prover ->
           compatible = filter_compatible_problems(prover, problems)
@@ -409,13 +416,27 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
             compatible_results =
               Enum.map(compatible, fn problem ->
-                run_one(prover, problem, timeout_seconds, include_raw_output, verbose)
+                run_one(
+                  prover,
+                  problem,
+                  timeout_seconds,
+                  include_raw_output,
+                  verbose,
+                  prepared_for(input_plan, prover, problem)
+                )
               end)
 
             compatible_results ++ skipped_results
           else
             Enum.map(compatible, fn problem ->
-              run_one(prover, problem, timeout_seconds, include_raw_output, verbose)
+              run_one(
+                prover,
+                problem,
+                timeout_seconds,
+                include_raw_output,
+                verbose,
+                prepared_for(input_plan, prover, problem)
+              )
             end)
           end
         end)
@@ -439,7 +460,7 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     timeout_seconds = Keyword.get(opts, :timeout_seconds, 60)
     include_raw_output = Keyword.get(opts, :include_raw_output, false)
     verbose = Keyword.get(opts, :verbose, false)
-    run_one(prover_mod, problem_mod, timeout_seconds, include_raw_output, verbose)
+    run_one(prover_mod, problem_mod, timeout_seconds, include_raw_output, verbose, :auto)
   end
 
   @doc """
@@ -585,17 +606,47 @@ defmodule AtpBenchmarkRunner.LocalRunner do
 
   # --- Prover execution ---
 
-  defp run_one(
+  defp run_one(%Prover{} = prover, %Problem{} = problem, timeout_seconds, raw?, verbose, prepared) do
+    case resolve_prepared(prover, problem, prepared) do
+      {:ok, input} -> do_run_one(prover, problem, input, timeout_seconds, raw?, verbose)
+      {:skip, skip} -> skipped_result(prover, problem, skip)
+    end
+  end
+
+  # A run passes the plan it already built, so includes are expanded and inputs
+  # decided once. `:auto` prepares on demand for `run_single` and other callers.
+  defp resolve_prepared(_prover, _problem, {:ok, input}) when is_map(input), do: {:ok, input}
+  defp resolve_prepared(_prover, _problem, {:skip, skip}), do: {:skip, skip}
+  defp resolve_prepared(prover, problem, :auto), do: Input.prepare(prover, problem)
+
+  defp prepared_for(plan, prover, problem) do
+    Map.get(plan.inputs, "#{prover.name}|#{problem.id}", :auto)
+  end
+
+  # An unusable input is an input problem, not a prover failure: it is recorded
+  # with its reason and reported as InputError instead of a verdict.
+  defp skipped_result(prover, problem, skip) do
+    Input.skipped_result(%{
+      prover: prover.name,
+      problem_id: problem.id,
+      problem_name: problem.name,
+      status: skip.status,
+      reason: "#{prover.label}: #{skip.reason}",
+      detail: skip.detail
+    })
+  end
+
+  defp do_run_one(
          %Prover{local_execution: :escript} = prover,
          %Problem{} = problem,
+         input,
          timeout_seconds,
          raw?,
          _verbose
        ) do
-    problem_path = problem.path || problem.name
     problem_id = problem.id
 
-    {cmd, cmd_args, cmd_opts} = local_tableaux_command(problem_path, timeout_seconds)
+    {cmd, cmd_args, cmd_opts} = local_tableaux_command(input.path, timeout_seconds)
     wall_start = System.monotonic_time(:millisecond)
     result = run_cmd(cmd, cmd_args, cmd_opts)
     wall_end = System.monotonic_time(:millisecond)
@@ -611,22 +662,23 @@ defmodule AtpBenchmarkRunner.LocalRunner do
       szs_status: szs_status,
       exit_status: exit_status,
       wall_time_ms: wall_time_ms,
-      raw_output: if(raw?, do: output, else: nil)
+      raw_output: if(raw?, do: output, else: nil),
+      metadata: input_metadata(input)
     )
   end
 
-  defp run_one(%Prover{} = prover, %Problem{} = problem, timeout_seconds, raw?, verbose) do
-    problem_path = problem.path || problem.name
+  defp do_run_one(%Prover{} = prover, %Problem{} = problem, input, timeout_seconds, raw?, verbose) do
     problem_id = problem.id
 
-    case try_docker_or_native(prover, problem_path, timeout_seconds, verbose) do
+    case try_docker_or_native(prover, input.path, timeout_seconds, verbose) do
       {:ok, output, exit_status, wall_time_ms} ->
         Result.from_output(prover, problem_id, output,
           problem_id: problem_id,
           problem_name: problem.name,
           exit_status: exit_status,
           wall_time_ms: wall_time_ms,
-          raw_output: if(raw?, do: output, else: nil)
+          raw_output: if(raw?, do: output, else: nil),
+          metadata: input_metadata(input)
         )
 
       {:gaveup, reason} ->
@@ -638,9 +690,15 @@ defmodule AtpBenchmarkRunner.LocalRunner do
           problem_name: problem.name,
           exit_status: -1,
           wall_time_ms: 0,
-          raw_output: if(raw?, do: gave_up_output, else: nil)
+          raw_output: if(raw?, do: gave_up_output, else: nil),
+          metadata: input_metadata(input)
         )
     end
+  end
+
+  # Which input the prover actually received, so a result can be traced back.
+  defp input_metadata(input) do
+    %{input_kind: Input.kind_label(input.kind), dialect: input.dialect.label}
   end
 
   defp try_docker_or_native(prover, problem_path, timeout_seconds, verbose) do
@@ -684,7 +742,9 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     problem_id = Path.rootname(problem_path) |> Path.basename()
     sif_path = local_sif_path(prover)
 
-    {mount_dir, mount_file} = Input.local_mount(prover, problem_path)
+    # `problem_path` is already the prepared input (expanded, converted or the
+    # original), so only its directory needs mounting.
+    {mount_dir, mount_file} = Input.mount_for(problem_path)
 
     rest =
       prover.command_template
@@ -799,11 +859,13 @@ defmodule AtpBenchmarkRunner.LocalRunner do
        ) do
     problem_id = Path.rootname(problem_path) |> Path.basename()
 
-    # Input preparation depends on the prover's `input` field: either the raw
-    # `.p` is used or a converted SMT-LIB/THF file is produced first.
+    # `problem_path` is already the prepared input (expanded, converted or the
+    # original); Docker on Windows needs the directory as a Unix-style path.
     {mount_dir, mount_file} =
-      Input.local_mount(prover, problem_path)
+      Input.mount_for(problem_path)
       |> then(fn {dir, file} -> {docker_path(dir), file} end)
+
+    container = "atp-#{prover.name}-#{System.unique_integer([:positive])}"
 
     rest =
       prover.command_template
@@ -823,7 +885,8 @@ defmodule AtpBenchmarkRunner.LocalRunner do
       end)
 
     docker_args =
-      ["run", "--rm", "-v", "#{mount_dir}:/problems:ro", image] ++ prover_args
+      ["run", "--rm", "--name", container, "-v", "#{mount_dir}:/problems:ro", image] ++
+        prover_args
 
     if verbose do
       IO.puts("")
@@ -831,12 +894,61 @@ defmodule AtpBenchmarkRunner.LocalRunner do
     end
 
     wall_start = System.monotonic_time(:millisecond)
-    {output, exit_code} = run_cmd("docker", docker_args, [])
+
+    {output, exit_code} =
+      run_docker_with_deadline(docker_args, timeout_seconds, container)
+
     wall_end = System.monotonic_time(:millisecond)
 
     # No per-prover output rewriting: the prover's declared `parser`
     # (`:szs` / `:smt_bare` / custom) handles status extraction in Result.
     {:ok, output, exit_code, wall_end - wall_start}
+  end
+
+  # `docker run` blocks for as long as the prover runs, and a prover can exceed
+  # its own time flag (per-strategy budgets). The container is named so it can be
+  # killed at the deadline, the way the HPC job script wraps each task in timeout.
+  defp run_docker_with_deadline(docker_args, timeout_seconds, container) do
+    timeout_output =
+      "% SZS status Timeout\n" <>
+        "% LocalRunner: stopped #{container} after #{timeout_seconds}s\n"
+
+    case run_with_deadline(
+           fn -> run_cmd("docker", docker_args, []) end,
+           timeout_seconds,
+           fn -> kill_container(container) end
+         ) do
+      {:ok, result} -> result
+      :timed_out -> {timeout_output, 124}
+    end
+  end
+
+  @doc false
+  # Runs `fun` with a ceiling of `timeout_seconds + grace_ms` and calls
+  # `on_timeout` when it is exceeded.
+  @spec run_with_deadline((-> result), number(), (-> any()), non_neg_integer()) ::
+          {:ok, result} | :timed_out
+        when result: term()
+  def run_with_deadline(fun, timeout_seconds, on_timeout, grace_ms \\ @docker_grace_ms) do
+    deadline_ms = round(timeout_seconds * 1_000) + grace_ms
+    task = Task.async(fun)
+
+    case Task.yield(task, deadline_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} ->
+        {:ok, result}
+
+      _ ->
+        on_timeout.()
+        :timed_out
+    end
+  end
+
+  defp kill_container(container) do
+    if detect_docker_available() do
+      _ = System.cmd("docker", ["kill", container], stderr_to_stdout: true)
+    end
+
+    :ok
   end
 
   # --- Command execution ---

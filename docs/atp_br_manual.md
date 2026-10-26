@@ -35,7 +35,9 @@ AtpBenchmarkRunner.load_env!("../.env")
 
 `setup_local/1` sets `ATP_BENCHMARK_RUNNER_STORE_DIR`, `TPTP_ROOT`,
 `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` and `ATP_BENCHMARK_RUNNER_SMT_THF_DIR` under
-`tmp_root`. Without it everything falls back to `~/.cache/atp_benchmark_runner`.
+`tmp_root`. Problems whose `include` directives are expanded are staged under
+`ATP_BENCHMARK_RUNNER_EXPANDED_DIR` (`./tmp/expanded` by default). Without it
+everything falls back to `~/.cache/atp_benchmark_runner`.
 
 ---
 
@@ -143,9 +145,15 @@ result  = AtpBenchmarkRunner.local_run_single(:vampire, problems |> hd())
 `bootstrap/3` with `mode: :local` (the default) builds a `Run` plan; passing
 `timeout_seconds:` sets the per-problem limit. Local execution uses, in
 priority order: an existing local Apptainer SIF, then Docker, then the native
-executable. Provers that need a pre-parser (e.g. `cvc5` via `input: :smt2`,
-`lash` via `input: :thf`) are handled automatically by the per-prover
-`prover.exs` configuration.
+executable.
+
+Input is prepared per (prover, problem) pair by `AtpBenchmarkRunner.Input`:
+`include` directives are expanded, the problem's dialect is detected, and the
+problem is passed through untouched when the prover's `accepts` names that
+dialect. Only otherwise is it converted (`cvc5` via `input: :smt2`, `lash` and
+`shot_tx` via `input: {:to_thf, :lash}` for first-order input). A problem the
+prover cannot consume, or whose conversion would drop a statement, is recorded
+as `InputError` with the reason instead of being run.
 
 ### 3.5 Results table
 
@@ -430,7 +438,8 @@ never reached `sbatch`).
 | `ATP_BENCHMARK_RUNNER_STORE_DIR`            | `~/.cache/atp_benchmark_runner/store` | run manifests, results, reports (fallback: `ATP_BENCHMARK_RUNNER_CACHE_DIR`) |
 | `TPTP_ROOT` / `TPTP_DIR`                    | `./tmp/tptp`                          | local TPTP problem root                                                      |
 | `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR`          | `./tmp/smt_converted`                 | TPTP→SMT converted files (`cvc5`)                                            |
-| `ATP_BENCHMARK_RUNNER_SMT_THF_DIR`          | `./tmp/thf_converted`                 | TPTP→THF converted files (`lash`)                                            |
+| `ATP_BENCHMARK_RUNNER_SMT_THF_DIR`          | `./tmp/thf_converted`                 | TPTP→THF converted files (`lash`, `shot_tx`)                                 |
+| `ATP_BENCHMARK_RUNNER_EXPANDED_DIR`         | `./tmp/expanded`                      | problems with `include` directives inlined                                   |
 | `ATP_BENCHMARK_RUNNER_SIF_DIR`              | `./tmp/singularity_images`            | local Apptainer `.sif` images                                                |
 | `ATP_BENCHMARK_RUNNER_BUNDLED_EXAMPLES_DIR` | `./tmp/tptp_examples`                 | bundled TPTP examples copy                                                   |
 | `HPC_CONNECT_STEADY_CONNECTION`             | —                                     | HPC: persistent steady SSH shell (via hpc_connect)                           |

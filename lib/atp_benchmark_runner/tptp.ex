@@ -13,7 +13,10 @@ defmodule AtpBenchmarkRunner.TPTP do
   """
 
   alias AtpBenchmarkRunner.{Config, Problem}
-  alias AtpBenchmarkRunner.TPTP.{Archive, Downloader, Index}
+  alias AtpBenchmarkRunner.TPTP.{Archive, Downloader, Includes, Index}
+
+  # How deep a chain of includes is followed when downloading dependencies.
+  @max_include_depth 8
 
   @doc """
   Returns official TPTP archive choices known to the runner.
@@ -149,6 +152,7 @@ defmodule AtpBenchmarkRunner.TPTP do
   defp download_one(name, bundled_fallback?, opts) do
     case Downloader.download_problem(name, opts) do
       {:ok, path} ->
+        fetch_include_dependencies(path, opts)
         {:ok, path}
 
       {:error, {:not_found, _} = reason} ->
@@ -178,6 +182,54 @@ defmodule AtpBenchmarkRunner.TPTP do
         # library.
         {:ok, path}
     end
+  end
+
+  # A problem cannot run without the axiom sets it includes, so the includes are
+  # fetched too. Best effort: a file that stays missing becomes an explicit
+  # `include_unresolved` skip when the input is prepared.
+  defp fetch_include_dependencies(path, opts, depth \\ 0)
+
+  defp fetch_include_dependencies(_path, _opts, depth) when depth > @max_include_depth, do: :ok
+
+  defp fetch_include_dependencies(path, opts, depth) do
+    with {:ok, content} <- File.read(path) do
+      content
+      |> Includes.directive_names()
+      |> Enum.each(fn name ->
+        unless resolve_include(name, path, opts) do
+          case fetch_dependency(name, opts) do
+            {:ok, dependency} -> fetch_include_dependencies(dependency, opts, depth + 1)
+            {:error, _reason} -> :ok
+          end
+        end
+      end)
+    end
+  end
+
+  # Dependencies keep the name the directive uses (`Axioms/GRP003-0.ax`), which is
+  # where expansion looks for them.
+  defp fetch_dependency(name, opts) do
+    with true <- Tptp.Resolver.safe?(name) do
+      target = Path.join(Downloader.single_problem_dir(opts), name)
+
+      cond do
+        File.exists?(target) ->
+          {:ok, target}
+
+        true ->
+          with {:ok, content} <- Downloader.fetch_single_problem(name, opts) do
+            File.mkdir_p!(Path.dirname(target))
+            File.write!(target, content)
+            {:ok, target}
+          end
+      end
+    else
+      _unsafe -> {:error, {:unsafe_include, name}}
+    end
+  end
+
+  defp resolve_include(name, from_path, opts) do
+    Includes.resolve(name, from_path, tptp_root: Includes.roots(Config.tptp_dir(opts)))
   end
 
   defp warn_download_failures([]), do: :ok

@@ -13,6 +13,7 @@ defmodule AtpBenchmarkRunner.Config do
   @cache_dir_var "ATP_BENCHMARK_RUNNER_CACHE_DIR"
   @smt_tmp_dir_var "ATP_BENCHMARK_RUNNER_SMT_TMP_DIR"
   @thf_tmp_dir_var "ATP_BENCHMARK_RUNNER_SMT_THF_DIR"
+  @expanded_dir_var "ATP_BENCHMARK_RUNNER_EXPANDED_DIR"
   @bundled_examples_dir_var "ATP_BENCHMARK_RUNNER_BUNDLED_EXAMPLES_DIR"
   @user_examples_dir_var "ATP_BENCHMARK_RUNNER_USER_EXAMPLES_DIR"
   @single_download_dir_var "ATP_BENCHMARK_RUNNER_SINGLE_DOWNLOAD_DIR"
@@ -94,6 +95,22 @@ defmodule AtpBenchmarkRunner.Config do
     |> option_value([:thf_tmp_dir])
     |> first_present(get(@thf_tmp_dir_var, opts))
     |> first_present(Path.expand("./tmp/thf_converted"))
+    |> expand_path()
+  end
+
+  @doc """
+  Returns the temporary directory used for problems whose `include` directives
+  have been expanded into a single self-contained file.
+
+  Configure via `ATP_BENCHMARK_RUNNER_EXPANDED_DIR` env var or the
+  `:expanded_dir` option. Falls back to `./tmp/expanded`.
+  """
+  @spec expanded_tmp_dir(keyword()) :: binary()
+  def expanded_tmp_dir(opts \\ []) do
+    opts
+    |> option_value([:expanded_dir, :expanded_tmp_dir])
+    |> first_present(get(@expanded_dir_var, opts))
+    |> first_present(Path.expand("./tmp/expanded"))
     |> expand_path()
   end
 

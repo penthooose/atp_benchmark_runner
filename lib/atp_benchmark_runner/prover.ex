@@ -20,6 +20,8 @@ defmodule AtpBenchmarkRunner.Prover do
     parser: :szs,
     aliases: [],
     input: :tptp,
+    accepts: :all,
+    converts: :all,
     supports: %{forms: :all, requires_conjecture?: false},
     default_args: [],
     env: %{},
@@ -37,7 +39,9 @@ defmodule AtpBenchmarkRunner.Prover do
           command_template: binary(),
           parser: :szs | :smt_bare | atom() | tuple(),
           aliases: [binary()],
-          input: :tptp | :smt2 | :thf | {:custom, module()} | atom(),
+          input: :tptp | :smt2 | :thf | {:to_thf, atom()} | {:custom, module()} | atom(),
+          accepts: :all | [atom()],
+          converts: :all | [atom()],
           supports: map(),
           default_args: keyword(),
           env: map(),
@@ -83,6 +87,7 @@ defmodule AtpBenchmarkRunner.Prover do
 
   def normalize(attrs) when is_map(attrs) do
     attrs = atomize_known_keys(attrs)
+    input = Map.get(attrs, :input, :tptp)
 
     %__MODULE__{
       name: normalize_name(Map.fetch!(attrs, :name)),
@@ -92,7 +97,9 @@ defmodule AtpBenchmarkRunner.Prover do
       command_template: Map.fetch!(attrs, :command_template),
       parser: Map.get(attrs, :parser, :szs),
       aliases: Map.get(attrs, :aliases, []),
-      input: Map.get(attrs, :input, :tptp),
+      input: input,
+      accepts: normalize_accepts(Map.get(attrs, :accepts), input),
+      converts: normalize_converts(Map.get(attrs, :converts)),
       supports:
         Map.merge(%{forms: :all, requires_conjecture?: false}, Map.get(attrs, :supports, %{})),
       default_args: Map.get(attrs, :default_args, []),
@@ -103,6 +110,21 @@ defmodule AtpBenchmarkRunner.Prover do
       metadata: Map.get(attrs, :metadata, %{})
     }
   end
+
+  # A prover that converts by default accepts nothing as-is; a pass-through
+  # prover accepts whatever it is given. Declaring `accepts` overrides both.
+  defp normalize_accepts(nil, :tptp), do: :all
+  defp normalize_accepts(nil, _input), do: []
+
+  defp normalize_accepts(accepts, _input),
+    do: AtpBenchmarkRunner.TPTP.Dialect.normalize_accepts(accepts)
+
+  # Which dialects the declared conversion actually covers. `:all` keeps the
+  # behaviour of provers that do not declare it.
+  defp normalize_converts(nil), do: :all
+
+  defp normalize_converts(converts),
+    do: AtpBenchmarkRunner.TPTP.Dialect.normalize_accepts(converts)
 
   @doc """
   Renders a prover command for local/preflight use where the problem path is
@@ -134,6 +156,8 @@ defmodule AtpBenchmarkRunner.Prover do
       parser: prover.parser,
       aliases: prover.aliases,
       input: prover.input,
+      accepts: prover.accepts,
+      converts: prover.converts,
       supports: prover.supports,
       default_args: prover.default_args,
       env: prover.env,
@@ -199,6 +223,8 @@ defmodule AtpBenchmarkRunner.Prover do
   defp known_key("parser"), do: :parser
   defp known_key("aliases"), do: :aliases
   defp known_key("input"), do: :input
+  defp known_key("accepts"), do: :accepts
+  defp known_key("converts"), do: :converts
   defp known_key("supports"), do: :supports
   defp known_key("default_args"), do: :default_args
   defp known_key("env"), do: :env

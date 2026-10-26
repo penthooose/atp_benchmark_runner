@@ -45,6 +45,10 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
   and could take the whole Livebook runtime down with it.
 
   The remote existence check is batched into a single `find` command.
+
+  `:extra_uploads` carries prepared inputs the caller generated itself (expanded
+  include graphs, THF/SMT conversions) as `{local_path, remote_path}` pairs; they
+  ride the same batched transfer.
   """
   @spec sync_problem_set!(HpcConnect.Session.t(), [Problem.t()], keyword()) :: [Problem.t()]
   def sync_problem_set!(%HpcConnect.Session{} = session, problems, opts \\ [])
@@ -57,7 +61,12 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
 
     entries = Enum.map(problems, &sync_plan(&1, root, existing))
 
-    uploads = Enum.flat_map(entries, & &1.uploads)
+    uploads =
+      (Enum.flat_map(entries, & &1.uploads) ++
+         Enum.filter(Keyword.get(opts, :extra_uploads, []), fn {local, _remote} ->
+           File.exists?(local)
+         end))
+      |> Enum.uniq()
 
     # All files ride a handful of SSH commands (batch base64), so a 14-problem
     # sync makes ~3 SSH calls instead of ~56.
@@ -110,11 +119,10 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
       local_file?(problem) ->
         remote_path = remote_problem_path(problem, root)
 
-        uploads =
-          original_uploads(problem, remote_path, existing) ++
-            converted_uploads(problem.path, remote_path)
-
-        %{problem: mark_synced(problem, remote_path), uploads: uploads}
+        %{
+          problem: mark_synced(problem, remote_path),
+          uploads: original_uploads(problem, remote_path, existing)
+        }
 
       already_remote?(problem) ->
         %{problem: problem, uploads: []}
@@ -125,41 +133,15 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
   end
 
   # The original problem file is only re-uploaded when not already remote
-  # (unchanged copies are reused). Converted files (.smt2 / _thf.p) are
-  # regenerated fresh before each sync, so they are always re-uploaded; a stale
-  # remote conversion previously produced wrong results. Since every upload
-  # rides the same batched call, re-uploading conversions costs no extra
-  # connections.
+  # (unchanged copies are reused). Converted and expanded inputs are generated
+  # fresh before each sync and arrive through `:extra_uploads`, so a stale remote
+  # conversion can never be picked up again.
   defp original_uploads(%Problem{path: path}, remote_path, existing) do
     if MapSet.member?(existing, remote_path) do
       []
     else
       [{path, remote_path}]
     end
-  end
-
-  defp converted_uploads(local_path, remote_path) do
-    smt2_upload =
-      if File.exists?(conversion_path(local_path, ".smt2")) do
-        [{conversion_path(local_path, ".smt2"), conversion_path(remote_path, ".smt2")}]
-      else
-        []
-      end
-
-    thf_upload =
-      if File.exists?(conversion_path(local_path, "_thf.p")) do
-        [{conversion_path(local_path, "_thf.p"), conversion_path(remote_path, "_thf.p")}]
-      else
-        []
-      end
-
-    smt2_upload ++ thf_upload
-  end
-
-  defp conversion_path(path, suffix) do
-    path
-    |> String.replace_suffix(".p", suffix)
-    |> String.replace_suffix(".tptp", suffix)
   end
 
   defp plan_entry(%Problem{} = problem, root) do
@@ -185,6 +167,12 @@ defmodule AtpBenchmarkRunner.HPC.TPTPSync do
           })
     }
   end
+
+  @doc """
+  Returns the remote path a local problem is synced to.
+  """
+  @spec remote_path(Problem.t(), binary()) :: binary()
+  def remote_path(%Problem{} = problem, root), do: remote_problem_path(problem, root)
 
   defp remote_problem_path(%Problem{} = problem, root) do
     relative =

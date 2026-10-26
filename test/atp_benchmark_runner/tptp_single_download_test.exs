@@ -30,14 +30,15 @@ defmodule AtpBenchmarkRunner.TPTP.SingleDownloadTest do
   </html>
   """
 
-  @sample_ax_html """
-  <html><head><title>TPTP Axiom File: GRP003-0.ax</title></head>
-  <body><pre>
-  % File     : GRP003-0 : TPTP v9.3.0.
-  % Domain   : Group Theory
-  fof(left_identity,axiom,
-      ( multiply(identity,X) = X ) ).
-  </pre></body></html>
+  @sample_problem """
+  %--------------------------------------------------------------------------
+  % File     : GRP001-1 : TPTP v9.3.1. Released v1.0.0.
+  % Status   : Unsatisfiable
+  % SPC      : CNF_UNS_RFO_SEQ_HRN
+  %--------------------------------------------------------------------------
+  include('Axioms/GRP003-0.ax').
+  cnf(square_element,hypothesis,
+      product(X,X,identity) ).
   """
 
   @not_found_html """
@@ -61,20 +62,37 @@ defmodule AtpBenchmarkRunner.TPTP.SingleDownloadTest do
     end
   end
 
-  describe "Downloader.single_problem_url/1" do
-    test "builds the SeeTPTP CGI URL with an inferred domain" do
-      assert Downloader.single_problem_url("GRP001-1.p") ==
-               "https://tptp.org/cgi-bin/SeeTPTP?Category=Problems&Domain=GRP&File=GRP001-1.p"
+  describe "Downloader.file_url/1" do
+    test "addresses one file by its library-relative path" do
+      assert Downloader.file_url("GRP001-1.p") ==
+               "https://seetptp.tptp.org/file/TPTPWorld/TPTP/Problems/GRP/GRP001-1.p"
+
+      assert Downloader.file_url("GRP003-0.ax") ==
+               "https://seetptp.tptp.org/file/TPTPWorld/TPTP/Axioms/GRP003-0.ax"
     end
 
-    test "uses Category=Axioms for .ax files" do
-      assert Downloader.single_problem_url("GRP003-0.ax") ==
-               "https://tptp.org/cgi-bin/SeeTPTP?Category=Axioms&Domain=GRP&File=GRP003-0.ax"
+    test "keeps a path that is already relative to the library" do
+      assert Downloader.file_url("Axioms/GRP003-0.ax") ==
+               "https://seetptp.tptp.org/file/TPTPWorld/TPTP/Axioms/GRP003-0.ax"
+    end
+  end
+
+  describe "Downloader.verify_single_problem/2" do
+    test "accepts the requested file" do
+      assert :ok = Downloader.verify_single_problem(@sample_problem, "GRP001-1.p")
     end
 
-    test "omits the domain when the name has no three-letter TPTP prefix" do
-      assert Downloader.single_problem_url("custom.p") ==
-               "https://tptp.org/cgi-bin/SeeTPTP?Category=Problems&File=custom.p"
+    test "rejects a body that is a different file" do
+      assert {:error, {:wrong_file, "GRP003-0.ax", "grp001-1"}} =
+               Downloader.verify_single_problem(@sample_problem, "GRP003-0.ax")
+    end
+
+    test "rejects a page without a TPTP header" do
+      assert {:error, {:unidentified_file, "THF001+0.p"}} =
+               Downloader.verify_single_problem(
+                 "<html><body>The TPTP browser has moved</body></html>",
+                 "THF001+0.p"
+               )
     end
   end
 

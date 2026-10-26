@@ -35,7 +35,14 @@ defmodule AtpBenchmarkRunner.LocalRunnerTest do
     end
 
     test "returns GaveUp for unknown executables" do
-      problem = Problem.new(%{id: "test", name: "test", path: "nonexistent.p"})
+      dir = Path.join(System.tmp_dir!(), "atp_local_runner_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      path = Path.join(dir, "GRP000-0.p")
+      File.write!(path, "cnf(a, axiom, p).\ncnf(b, negated_conjecture, ~ p).\n")
+
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      problem = Problem.new(%{id: "test", name: "GRP000-0", path: path})
 
       result =
         LocalRunner.run_single(
@@ -50,6 +57,36 @@ defmodule AtpBenchmarkRunner.LocalRunnerTest do
 
       assert result.szs_status == "GaveUp"
       assert result.exit_status == -1
+    end
+
+    test "reports a missing problem file as an input error, not a prover failure" do
+      problem = Problem.new(%{id: "missing", name: "missing", path: "nonexistent.p"})
+
+      result = LocalRunner.run_single(:vampire, problem, timeout_seconds: 5)
+
+      assert result.szs_status == "InputError"
+      assert result.metadata.reason =~ "could not be read"
+    end
+  end
+
+  describe "wall-clock ceiling" do
+    test "returns the finished result when it arrives in time" do
+      assert {:ok, :done} =
+               LocalRunner.run_with_deadline(fn -> :done end, 5, fn -> flunk() end, 50)
+    end
+
+    test "stops the work and reports a timeout when it overruns the budget" do
+      {:ok, receiver} = Agent.start_link(fn -> nil end)
+
+      assert :timed_out =
+               LocalRunner.run_with_deadline(
+                 fn -> Process.sleep(5_000) end,
+                 0,
+                 fn -> Agent.update(receiver, fn _ -> :killed end) end,
+                 50
+               )
+
+      assert Agent.get(receiver, & &1) == :killed
     end
   end
 

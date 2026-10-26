@@ -10,11 +10,8 @@ defmodule AtpBenchmarkRunner.TPTP.Downloader do
   alias AtpBenchmarkRunner.TPTP.Archive
   alias AtpBenchmarkRunner.TPTP.Index
 
-  # The TPTP site only publishes the full library as one `.tgz` archive, but
-  # individual problems are available through the SeeTPTP CGI
-  # ("Problems and Axiom sets" link). The CGI serves an HTML wrapper with the
-  # problem body inside a `<pre>` block, which `extract_single_problem/1` parses.
-  @single_problem_base "https://tptp.org/cgi-bin/SeeTPTP"
+  # Exact, single-file endpoint of the current TPTP browser.
+  @file_base "https://seetptp.tptp.org/file/TPTPWorld/TPTP"
 
   # Marker the SeeTPTP CGI embeds when the requested problem does not exist in
   # the currently published release (e.g. the bundled smoke examples GRP001-0.p
@@ -107,37 +104,7 @@ defmodule AtpBenchmarkRunner.TPTP.Downloader do
     end
   end
 
-  @doc """
-  Returns the SeeTPTP CGI URL that serves one TPTP problem (or axiom).
-
-  The domain is inferred from the file name (first three uppercase letters,
-  e.g. `GRP`), matching the hrefs the TPTP site uses for its
-  "Problems and Axiom sets" listings. `.ax` files use `Category=Axioms`.
-  """
-  @spec single_problem_url(binary()) :: binary()
-  def single_problem_url(name) when is_binary(name) do
-    basename = Path.basename(name)
-    domain = Index.domain_from_name(basename)
-    category = category_for(basename)
-
-    params =
-      ["Category=#{category}"] ++
-        if(domain, do: ["Domain=#{domain}"], else: []) ++
-        ["File=#{URI.encode_www_form(basename)}"]
-
-    "#{@single_problem_base}?#{Enum.join(params, "&")}"
-  end
-
-  defp category_for(basename) do
-    if String.ends_with?(basename, ".ax"), do: "Axioms", else: "Problems"
-  end
-
-  @doc """
-  Returns the base directory under which individually downloaded problems are
-  stored.
-
-  Defaults to the TPTP root (see `AtpBenchmarkRunner.Config.single_download_dir/1`).
-  """
+  @doc "The base directory individually downloaded problems are stored in."
   @spec single_problem_dir(keyword()) :: binary()
   def single_problem_dir(opts \\ []), do: AtpBenchmarkRunner.Config.single_download_dir(opts)
 
@@ -203,13 +170,100 @@ defmodule AtpBenchmarkRunner.TPTP.Downloader do
   """
   @spec fetch_single_problem(binary(), keyword()) :: {:ok, binary()} | {:error, term()}
   def fetch_single_problem(name, opts \\ []) when is_binary(name) do
-    url = single_problem_url(name)
+    url = file_url(name)
     fetch_fun = Keyword.get(opts, :fetch_fun, &default_fetch/1)
 
     with {:ok, html} <- fetch_fun.(url),
-         {:ok, content} <- extract_single_problem(html, name) do
+         {:ok, content} <- extract_single_problem(html, name),
+         :ok <- verify_single_problem(content, name) do
       {:ok, content}
     end
+  end
+
+  @doc """
+  URL that serves one library file.
+
+  The old `SeeTPTP?Category=...&File=...` CGI now answers with a "browser has
+  moved" page, and an axiom request could come back as a problem file. This
+  endpoint addresses a file by its library-relative path instead.
+
+      iex> AtpBenchmarkRunner.TPTP.Downloader.file_url("GRP003-0.ax")
+      "https://seetptp.tptp.org/file/TPTPWorld/TPTP/Axioms/GRP003-0.ax"
+  """
+  @spec file_url(binary()) :: binary()
+  def file_url(name) when is_binary(name) do
+    "#{@file_base}/#{name |> library_path() |> encode_path()}"
+  end
+
+  @doc """
+  Rejects a fetched body that is not the file that was asked for.
+
+  A wrong body used to be written to disk and shadow the real file during include
+  resolution, which showed up as an unexplainable cycle. The `% File :` header
+  names the file, so it is checked.
+  """
+  @spec verify_single_problem(binary(), binary()) :: :ok | {:error, term()}
+  def verify_single_problem(content, name) when is_binary(content) do
+    expected = name |> Path.basename() |> strip_tptp_extension() |> String.downcase()
+
+    case Tptp.Header.from_string(content) do
+      {:ok, header, _diagnostics} ->
+        case Tptp.Header.get(header, "File") do
+          nil -> {:error, {:unidentified_file, Path.basename(name)}}
+          file -> compare_file_name(file, expected, name)
+        end
+
+      {:error, _reason} ->
+        {:error, {:unidentified_file, Path.basename(name)}}
+    end
+  end
+
+  defp compare_file_name(file, expected, name) do
+    got = file |> String.split(":") |> List.first() |> String.trim() |> String.downcase()
+
+    if got == expected do
+      :ok
+    else
+      {:error, {:wrong_file, Path.basename(name), got}}
+    end
+  end
+
+  defp strip_tptp_extension(name) do
+    name
+    |> String.replace_suffix(".p", "")
+    |> String.replace_suffix(".tptp", "")
+    |> String.replace_suffix(".ax", "")
+  end
+
+  # Library layout: problems live under `Problems/<DOMAIN>/`, axiom sets flat
+  # under `Axioms/`. A name that already carries a path is used as it is.
+  defp library_path(name) do
+    path = name |> String.replace("\\", "/") |> String.trim_leading("/")
+
+    if String.contains?(path, "/") do
+      path
+    else
+      basename = Path.basename(path)
+      category = category_for(basename)
+
+      parts =
+        case {category, Index.domain_from_name(basename)} do
+          {"Problems", domain} when is_binary(domain) -> [category, domain, basename]
+          _ -> [category, basename]
+        end
+
+      Enum.join(parts, "/")
+    end
+  end
+
+  defp category_for(basename) do
+    if String.ends_with?(basename, ".ax"), do: "Axioms", else: "Problems"
+  end
+
+  defp encode_path(path) do
+    path
+    |> String.split("/", trim: true)
+    |> Enum.map_join("/", &URI.encode/1)
   end
 
   @doc """

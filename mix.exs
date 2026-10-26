@@ -22,6 +22,10 @@ defmodule AtpBenchmarkRunner.MixProject do
   defp deps do
     [
       {:hpc_connect, github: "penthooose/hpc_connect"},
+      # TPTP/SZS language library: header parsing, include expansion, and the
+      # official SZS ontology. Owns the dialect and status vocabulary the
+      # runner must not re-implement (see tasks/tasks_fix_thf.md).
+      {:tptp, "~> 0.3"},
       {:jason, "~> 1.4"},
       {:kino, "~> 0.19"},
       {:req, "~> 0.5"},

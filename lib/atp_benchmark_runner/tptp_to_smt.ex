@@ -82,6 +82,26 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
   end
 
   @doc """
+  Counts the formula entries of a problem against the entries the parser kept.
+
+  A converter drops whatever it cannot parse, so a converted file can silently
+  lose statements. Callers use `declared != parsed` as an integrity gate and
+  refuse to ship the conversion.
+
+  `type`-role declarations are excluded from both counts: they are not formulas,
+  and `parse_entry/1` skips them by design.
+  """
+  @spec conversion_counts(binary()) :: %{declared: non_neg_integer(), parsed: non_neg_integer()}
+  def conversion_counts(content) when is_binary(content) do
+    entries = content |> tokenize() |> split_entries()
+
+    %{
+      declared: Enum.count(entries, &formula_entry?/1),
+      parsed: entries |> Enum.flat_map(&parse_entry/1) |> length()
+    }
+  end
+
+  @doc """
   Collects the signature for parsed entries: `{sig, bool_vars}` where
   `sig = %{preds: %{name => arity}, funcs: %{name => arity}}` and `bool_vars`
   is the set of `$o`-quantified variable names.
@@ -219,6 +239,21 @@ defmodule AtpBenchmarkRunner.TPTPToSMT do
   end
 
   defp parse_entry(_), do: []
+
+  # Whether one token run is a formula entry the converter is expected to keep:
+  # a `fof`/`cnf`/`tff`/`thf` statement whose role is not `type`.
+  defp formula_entry?([{:ident, kind} | rest]) when kind in ["fof", "cnf", "tff", "thf"] do
+    with [{:punct, "("} | inner] <- rest,
+         parts when length(parts) >= 3 <- split_at_top(inner, ","),
+         [_name_tokens, role_tokens | _formula_tokens] <- parts,
+         {:ok, role} <- single_ident(role_tokens) do
+      role != "type"
+    else
+      _ -> false
+    end
+  end
+
+  defp formula_entry?(_), do: false
 
   # Parse a formula, returning :error on unsupported syntax or leftover tokens
   # so one bad entry never aborts a run.

@@ -72,6 +72,13 @@ defmodule AtpBenchmarkRunner.LivebookSetup do
       path("ATP_BENCHMARK_RUNNER_SMT_TMP_DIR", :smt_tmp, "Paths · SMT temp dir", "smt_converted"),
       path("ATP_BENCHMARK_RUNNER_SMT_THF_DIR", :thf_tmp, "Paths · THF temp dir", "thf_converted"),
       path(
+        "ATP_BENCHMARK_RUNNER_EXPANDED_DIR",
+        :expanded_tmp,
+        "Paths · Expanded includes dir",
+        "expanded",
+        help: "Problems whose include directives were inlined"
+      ),
+      path(
         "ATP_BENCHMARK_RUNNER_SIF_DIR",
         :sif_dir,
         "Paths · Apptainer SIF dir",

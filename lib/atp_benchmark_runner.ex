@@ -60,8 +60,9 @@ defmodule AtpBenchmarkRunner do
 
       AtpBenchmarkRunner.setup_local(tmp_root: Path.expand("./tmp", __DIR__))
 
-  Sets `ATP_BENCHMARK_RUNNER_STORE_DIR`, `TPTP_ROOT`, and
-  `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR` under `tmp_root`. Without this,
+  Sets `ATP_BENCHMARK_RUNNER_STORE_DIR`, `TPTP_ROOT`,
+  `ATP_BENCHMARK_RUNNER_SMT_TMP_DIR`, `ATP_BENCHMARK_RUNNER_SMT_THF_DIR` and
+  `ATP_BENCHMARK_RUNNER_EXPANDED_DIR` under `tmp_root`. Without this,
   everything falls back to `~/.cache/atp_benchmark_runner`.
   """
   @spec setup_local(keyword()) :: :ok
@@ -75,6 +76,7 @@ defmodule AtpBenchmarkRunner do
     System.put_env("TPTP_ROOT", Path.join(tmp_root, "tptp"))
     System.put_env("ATP_BENCHMARK_RUNNER_SMT_TMP_DIR", Path.join(tmp_root, "smt_converted"))
     System.put_env("ATP_BENCHMARK_RUNNER_SMT_THF_DIR", Path.join(tmp_root, "thf_converted"))
+    System.put_env("ATP_BENCHMARK_RUNNER_EXPANDED_DIR", Path.join(tmp_root, "expanded"))
     :ok
   end
 

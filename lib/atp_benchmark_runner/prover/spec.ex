@@ -38,6 +38,8 @@ defmodule AtpBenchmarkRunner.Prover.Spec do
     :sif_name,
     :command_template,
     :input,
+    :accepts,
+    :converts,
     :parser,
     :local_execution,
     :our_prover,
@@ -219,9 +221,14 @@ defmodule AtpBenchmarkRunner.Prover.Spec do
     input = Map.get(spec, :input, :tptp)
 
     unless input in [:tptp, :smt2, :thf] or
+             (is_tuple(input) and
+                match?({:to_thf, flavour} when is_atom(flavour), input)) or
              (is_tuple(input) and match?({:custom, mod} when is_atom(mod), input)) do
       raise ArgumentError, "unsupported `input` mode #{inspect(input)} in #{file}"
     end
+
+    validate_accepts!(Map.get(spec, :accepts), file)
+    validate_converts!(Map.get(spec, :converts), file)
 
     parser = Map.get(spec, :parser, :szs)
 
@@ -258,6 +265,55 @@ defmodule AtpBenchmarkRunner.Prover.Spec do
     end
   end
 
+  # `accepts` names TPTP dialects a prover reads untouched. A typo must fail at
+  # load time: silently accepting nothing would skip every problem instead.
+  defp validate_accepts!(nil, _file), do: :ok
+  defp validate_accepts!(:all, _file), do: :ok
+  defp validate_accepts!("all", _file), do: :ok
+
+  defp validate_accepts!(accepts, file) when is_list(accepts) do
+    invalid =
+      Enum.find_value(accepts, fn name ->
+        try do
+          AtpBenchmarkRunner.TPTP.Dialect.accept_form!(name)
+          nil
+        rescue
+          e in ArgumentError -> {name, Exception.message(e)}
+        end
+      end)
+
+    case invalid do
+      nil ->
+        :ok
+
+      {name, message} ->
+        raise ArgumentError,
+              "invalid `accepts` entry #{inspect(name)} in #{file}: #{message}"
+    end
+  end
+
+  defp validate_accepts!(other, file) do
+    raise ArgumentError,
+          "`accepts` must be :all or a list of TPTP languages in #{file}, " <>
+            "got #{inspect(other)}"
+  end
+
+  # Dialects a prover's converter covers; a THF problem must not go through a
+  # first-order encoding by default.
+  defp validate_converts!(nil, _file), do: :ok
+  defp validate_converts!(:all, _file), do: :ok
+  defp validate_converts!("all", _file), do: :ok
+
+  defp validate_converts!(converts, file) when is_list(converts) do
+    validate_accepts!(converts, file <> " (converts)")
+  end
+
+  defp validate_converts!(other, file) do
+    raise ArgumentError,
+          "`converts` must be :all or a list of TPTP languages in #{file}, " <>
+            "got #{inspect(other)}"
+  end
+
   defp validate_placeholders!(template, file) do
     unknown =
       template
@@ -271,5 +327,7 @@ defmodule AtpBenchmarkRunner.Prover.Spec do
             "unknown placeholder(s) #{inspect(unknown)} in command_template of #{file}; " <>
               "known: #{Enum.join(@known_placeholders, ", ")}"
     end
+
+    :ok
   end
 end

@@ -168,6 +168,7 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
         Results.collect(session, submitted_run,
           include_raw_output: hpc.include_raw_output,
           remote_root: hpc.remote_root,
+          expected_results: expected_results(submitted_run),
           collect_retry_forever: true
         )
       rescue
@@ -175,6 +176,8 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
           IO.puts("[runner] Results.collect warning: #{Exception.message(e)}")
           []
       end
+
+    results = results ++ skipped_input_results(submitted_run)
 
     # Auto-kill: explicitly cancel job arrays so SLURM releases resources
     # immediately, even for jobs that already reached a terminal state. Wrapped
@@ -278,6 +281,7 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
         Results.collect(session, submitted_run,
           include_raw_output: hpc.include_raw_output,
           remote_root: hpc.remote_root,
+          expected_results: expected_results(submitted_run),
           collect_retry_forever: true
         )
       rescue
@@ -285,6 +289,8 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
           IO.puts("[runner] Results.collect warning: #{Exception.message(e)}")
           []
       end
+
+    results = results ++ skipped_input_results(submitted_run)
 
     # Auto-kill: explicitly cancel the job so SLURM releases the node.
     try do
@@ -352,58 +358,96 @@ defmodule AtpBenchmarkRunner.HPC.Runner do
   defp sync_problems(%Run{} = run, %HpcConnect.Session{} = session, hpc) do
     if session.extended_debug do
       IO.puts(
-        "[hpc-ext-debug] #{stamp()} sync: pre-converting inputs (cvc5→smt2, lash/shot_tx→thf)"
+        "[hpc-ext-debug] #{stamp()} sync: preparing inputs " <>
+          "(include expansion, then SMT/THF conversion where the prover needs it)"
       )
     end
 
-    # Pre-convert problems for provers whose `input` is not `:tptp`
-    # (cvc5 to SMT, lash to THF). Must happen before syncing because the
-    # converted files are uploaded to the vault alongside the originals.
-    Enum.each(run.provers, fn prover ->
-      if Input.needs_conversion?(prover) do
-        Enum.each(run.problems, fn problem ->
-          if local_file?(problem) and
-               (String.ends_with?(problem.path, ".p") and
-                  not String.ends_with?(problem.path, "_thf.p")) do
-            # A conversion failure for one problem must not abort the whole
-            # run, so skip it and let the problem surface as a visible GaveUp
-            # instead of killing every prover.
-            try do
-              Input.convert_problem(prover, problem)
-            rescue
-              e ->
-                IO.puts(
-                  "[runner] ⚠ Skipping #{prover.name} input conversion for #{problem.name}: " <>
-                    Exception.message(e)
-                )
-            end
-          end
-        end)
-      end
-    end)
+    # One decision pass for the whole run: includes expanded once per problem,
+    # one input per (prover, problem) pair, staged in the configured temp dirs.
+    prepared = Input.plan(run.provers, run.problems)
 
-    remote_problems =
+    synced =
       TPTPSync.sync_problem_set!(session, run.problems,
         remote_tptp_dir: hpc.remote_tptp_dir,
-        extended_debug: session.extended_debug
+        extended_debug: session.extended_debug,
+        extra_uploads: extra_uploads(prepared, run, session, hpc)
       )
+
+    prepared_inputs = remote_inputs(prepared, run, synced)
 
     if session.extended_debug do
       IO.puts(
-        "[hpc-ext-debug] #{stamp()} sync: uploaded #{length(remote_problems)} problems to #{hpc.remote_tptp_dir}"
+        "[hpc-ext-debug] #{stamp()} sync: uploaded #{length(synced)} problems to " <>
+          "#{hpc.remote_tptp_dir}; #{map_size(prepared_inputs)} prepared input(s), " <>
+          "#{length(prepared.skips)} skipped"
       )
     end
 
-    %{run | problems: remote_problems}
+    %{
+      run
+      | problems: synced,
+        metadata:
+          Map.merge(run.metadata, %{
+            prepared_inputs: prepared_inputs,
+            input_skips: prepared.skips,
+            input_expected_results: length(prepared.entries)
+          })
+    }
   end
 
-  defp local_file?(%Problem{source: :local}), do: true
+  # Prepared inputs that are not the original problem file (expanded includes,
+  # THF/SMT conversions) are uploaded beside it.
+  defp extra_uploads(prepared, run, session, hpc) do
+    originals = Map.new(run.problems, &{&1.id, &1.path})
+    root = TPTPSync.remote_root(session, remote_tptp_dir: hpc.remote_tptp_dir)
 
-  defp local_file?(%Problem{path: path}) when is_binary(path) do
-    not String.starts_with?(path, "/")
+    prepared.entries
+    |> Enum.reject(&(&1.path == Map.get(originals, &1.problem.id)))
+    |> Enum.map(fn entry ->
+      remote_dir = entry.problem |> TPTPSync.remote_path(root) |> Path.dirname()
+      {entry.path, Path.join(remote_dir, Path.basename(entry.path))}
+    end)
+    |> Enum.uniq()
   end
 
-  defp local_file?(_), do: false
+  # The exact remote path each prover's task runs against, keyed so the job
+  # script never has to re-derive it.
+  defp remote_inputs(prepared, run, synced) do
+    originals = Map.new(run.problems, &{&1.id, &1.path})
+    remote_by_id = Map.new(synced, &{&1.id, &1.path})
+
+    Map.new(prepared.entries, fn entry ->
+      local = Map.get(originals, entry.problem.id)
+      remote_problem = Map.get(remote_by_id, entry.problem.id) || local
+
+      remote =
+        if entry.path == local do
+          remote_problem
+        else
+          Path.join(Path.dirname(remote_problem), Path.basename(entry.path))
+        end
+
+      {"#{entry.prover.name}|#{entry.problem.id}", remote}
+    end)
+  end
+
+  # How many result files the job will produce: one per prepared pair, since a
+  # skipped pair never reaches the cluster.
+  defp expected_results(%Run{} = run) do
+    case Input.metadata(run.metadata, :input_expected_results) do
+      count when is_integer(count) and count > 0 -> count
+      _ -> nil
+    end
+  end
+
+  # Skipped inputs are input problems, not prover failures, and `Report`/
+  # `MultiRun` already treat `InputError` as a non-attempt.
+  defp skipped_input_results(%Run{} = run) do
+    run.metadata
+    |> Input.metadata(:input_skips, [])
+    |> Input.skipped_results()
+  end
 
   defp wait_for_completion!(%HpcConnect.Session{} = session, %Run{} = run, hpc) do
     if hpc.wait_for_completion do
